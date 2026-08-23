@@ -177,6 +177,7 @@ async function loadFromFirebase(){
       });
       if(cfg.orderCounter!=null) window._orderCounter=cfg.orderCounter;
       if(cfg.pickupEnabled!=null) window._S.pickupEnabled=cfg.pickupEnabled;
+      if(cfg.shopClosed!=null) window._S.shopClosed=cfg.shopClosed;
       // Also sync from atomic counter doc if higher
       try{const cSnap=await fbGet('store/orderCounter');if(cSnap&&cSnap.value>window._orderCounter)window._orderCounter=cSnap.value;}catch(e){}
     }
@@ -281,7 +282,8 @@ window._fbPersist = async function(){
       discounts:window._S.discounts, discountEnabled:window._S.discountEnabled,
       msgTemplates:window._S.msgTemplates, productLang:window._S.productLang,
       popup:stripBase64(window._S.popup), orderCounter:window._orderCounter,
-      pickupEnabled:window._S.pickupEnabled!==false
+      pickupEnabled:window._S.pickupEnabled!==false,
+      shopClosed:window._S.shopClosed||{enabled:false}
     });
     await fbSet('store/config', cfgQuick);
 
@@ -656,6 +658,11 @@ footer{background:#1d3557;color:#fff;padding:36px 18px 18px;margin-top:auto}
 @media(max-width:380px){.products-grid{grid-template-columns:1fr}.kpi-grid{grid-template-columns:1fr}}
 </style><style>
 #fb-loading{display:none;position:fixed;inset:0;background:rgba(255,255,255,.95);z-index:9999;align-items:center;justify-content:center;flex-direction:column;gap:14px}
+#shop-closed-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:8888;align-items:center;justify-content:center;padding:20px}
+.shop-closed-box{background:#fff;border-radius:16px;max-width:480px;width:100%;text-align:center;padding:40px 28px;box-shadow:0 8px 40px rgba(0,0,0,.3)}
+.shop-closed-box img{max-width:100%;border-radius:10px;margin-bottom:18px}
+.shop-closed-box h2{font-size:1.4rem;font-weight:800;color:var(--pri);margin-bottom:8px}
+.shop-closed-box p{font-size:.92rem;color:#555;line-height:1.6}
 .fb-spinner{width:44px;height:44px;border:4px solid #eee;border-top-color:#e63946;border-radius:50%;animation:fbs .8s linear infinite}
 @keyframes fbs{to{transform:rotate(360deg)}}
 
@@ -681,6 +688,14 @@ html,body{overflow-x:hidden;max-width:100vw}
 </style>
 </head>
 <body>
+<div id="shop-closed-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.82);z-index:8888;align-items:center;justify-content:center;padding:20px">
+  <div style="background:#fff;border-radius:16px;max-width:480px;width:100%;text-align:center;padding:36px 24px;box-shadow:0 8px 40px rgba(0,0,0,.4)">
+    <img id="shop-closed-img" src="" style="display:none;max-width:100%;border-radius:10px;margin-bottom:16px"/>
+    <div style="font-size:2.5rem;margin-bottom:10px">🔒</div>
+    <h2 id="shop-closed-title" style="font-size:1.35rem;font-weight:800;color:#c0392b;margin-bottom:10px">团购已结束</h2>
+    <p id="shop-closed-msg" style="font-size:.9rem;color:#555;line-height:1.6;margin:0">感谢您的支持！本次团购已结束，敬请期待下一次团购活动。</p>
+  </div>
+</div>
 <div id="fb-loading">
   <div class="fb-spinner"></div>
   <div style="font-size:.95rem;color:#555;font-weight:600">Loading RUIJIA台湾代购...</div>
@@ -1034,6 +1049,26 @@ html,body{overflow-x:hidden;max-width:100vw}
       </div>
       <!-- SETTINGS -->
       <div class="admin-section" id="tab-settings">
+        <div class="card" style="margin-bottom:14px;border:1.5px solid #c0392b">
+          <h3 style="color:#c0392b">🔒 Shop Status 店铺状态</h3>
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+            <label class="toggle-sw"><input type="checkbox" id="shopClosedToggle" onchange="toggleShopClosed(this.checked)"><span class="slider"></span></label>
+            <span id="shopClosedLabel" style="font-size:.88rem;font-weight:600">Open 营业中</span>
+          </div>
+          <div class="fg"><label>Closed Title (EN)</label><input type="text" id="scTitleEn" placeholder="Group Buy Has Ended"/></div>
+          <div class="fg"><label>结束标题 (中)</label><input type="text" id="scTitleCn" placeholder="团购已结束"/></div>
+          <div class="fg"><label>Message (EN)</label><textarea id="scMsgEn" rows="2" placeholder="Thank you for your support..."></textarea></div>
+          <div class="fg"><label>说明 (中)</label><textarea id="scMsgCn" rows="2" placeholder="感谢您的支持..."></textarea></div>
+          <div class="fg"><label>Cover Image (optional) 封面图</label>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <label style="background:var(--sec);color:#fff;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:.82rem">📁 Upload<input type="file" accept="image/*" style="display:none" onchange="scUploadImg(event)"/></label>
+              <input type="text" id="scImgUrl" placeholder="or paste image URL" style="flex:1;min-width:160px"/>
+            </div>
+            <img id="scImgPreview" src="" style="display:none;max-width:200px;margin-top:8px;border-radius:8px"/>
+          </div>
+          <button class="save-btn" onclick="saveShopClosed()">💾 Save Shop Status</button>
+          <div class="msg" id="shopClosedMsg"></div>
+        </div>
         <div class="card"><h3>Admin Credentials</h3>
           <div class="fg"><label>Admin Email</label><input type="text" id="newEmail" placeholder="Leave blank to keep current"/></div>
           <div class="fg"><label>New Password</label><input type="password" id="newPwd" placeholder="Leave blank to keep current"/></div>
@@ -1199,7 +1234,7 @@ window._orderCounter=0;
 const REGIONS=['West Malaysia 西马','East Malaysia 东马','Singapore'];
 const PCMAP=[{min:1000,max:59999,r:'West Malaysia 西马'},{min:63000,max:68999,r:'West Malaysia 西马'},{min:70000,max:86999,r:'West Malaysia 西马'},{min:88000,max:91399,r:'East Malaysia 东马'},{min:93000,max:98859,r:'East Malaysia 东马'},{min:18906,max:829812,r:'Singapore',digits:6}];
 const COLORS=['#e63946','#2196F3','#4CAF50','#FF9800','#9C27B0','#009688','#F06292','#1d3557'];
-let S={products:[],shipping:{'West Malaysia 西马':{method:'weight',tiers:[{maxWeight:500,fee:8},{maxWeight:1000,fee:11},{maxWeight:2000,fee:15},{maxWeight:99999,fee:20}],amtTiers:[{maxAmt:50,fee:10},{maxAmt:100,fee:6},{maxAmt:99999,fee:0}],freeAbove:150},'East Malaysia 东马':{method:'weight',tiers:[{maxWeight:500,fee:15},{maxWeight:1000,fee:20},{maxWeight:2000,fee:28},{maxWeight:99999,fee:38}],amtTiers:[{maxAmt:100,fee:18},{maxAmt:200,fee:10},{maxAmt:99999,fee:0}],freeAbove:300},'Singapore':{method:'weight',tiers:[{maxWeight:500,fee:20},{maxWeight:1000,fee:28},{maxWeight:2000,fee:38},{maxWeight:99999,fee:55}],amtTiers:[{maxAmt:150,fee:25},{maxAmt:300,fee:15},{maxAmt:99999,fee:0}],freeAbove:500}},banks:[{id:'b1',name:'Maybank',accName:'17 Beauty House',accNo:'',extra:'',qr:'',active:true}],slides:[{img:'',overlayColor:'#000000',overlayOpacity:.35,titleEn:'Welcome to 17 Beauty House',titleCn:'欢迎光临17 Beauty House',subEn:'Quality beauty & wellness products',subCn:'优质美妆健康产品'}],settings:{password:'ruijiatwdgadmin@2008',email:'ruijiatwdg@shop.com'},branding:{shopEn:'17 Beauty House',shopCn:'17 Beauty House',logo:'🛍️',color:'#e63946',cdEnabled:false,cdEnd:'',cdLabel:'⏰ Sale ends in:',googleMap:'',googleMapLabel:'📍 Find us on Google Maps',showMap:false},footer:{company:'17 Beauty House',address:'',phone:'',email:'',waNum:'',waMsg:"Hi, I'd like to enquire about your products.",contactEnabled:false,showFaq:false,showTc:false},store:{addr:'',hours:'',phone:'',map:''},faq:[],tc:'',orders:[],customers:[],contactMessages:[],discounts:[],discountEnabled:true,msgTemplates:['Thank you for contacting us! We will reply within 24 hours.'],productLang:'both',popup:{enabled:false,img:'',title:'',titleCn:'',msg:'',msgCn:'',btnText:'Continue Shopping',btnTextCn:'继续购物',showOrder:true},pickupEnabled:true};
+let S={products:[],shipping:{'West Malaysia 西马':{method:'weight',tiers:[{maxWeight:500,fee:8},{maxWeight:1000,fee:11},{maxWeight:2000,fee:15},{maxWeight:99999,fee:20}],amtTiers:[{maxAmt:50,fee:10},{maxAmt:100,fee:6},{maxAmt:99999,fee:0}],freeAbove:150},'East Malaysia 东马':{method:'weight',tiers:[{maxWeight:500,fee:15},{maxWeight:1000,fee:20},{maxWeight:2000,fee:28},{maxWeight:99999,fee:38}],amtTiers:[{maxAmt:100,fee:18},{maxAmt:200,fee:10},{maxAmt:99999,fee:0}],freeAbove:300},'Singapore':{method:'weight',tiers:[{maxWeight:500,fee:20},{maxWeight:1000,fee:28},{maxWeight:2000,fee:38},{maxWeight:99999,fee:55}],amtTiers:[{maxAmt:150,fee:25},{maxAmt:300,fee:15},{maxAmt:99999,fee:0}],freeAbove:500}},banks:[{id:'b1',name:'Maybank',accName:'17 Beauty House',accNo:'',extra:'',qr:'',active:true}],slides:[{img:'',overlayColor:'#000000',overlayOpacity:.35,titleEn:'Welcome to 17 Beauty House',titleCn:'欢迎光临17 Beauty House',subEn:'Quality beauty & wellness products',subCn:'优质美妆健康产品'}],settings:{password:'ruijiatwdgadmin@2008',email:'ruijiatwdg@shop.com'},branding:{shopEn:'17 Beauty House',shopCn:'17 Beauty House',logo:'🛍️',color:'#e63946',cdEnabled:false,cdEnd:'',cdLabel:'⏰ Sale ends in:',googleMap:'',googleMapLabel:'📍 Find us on Google Maps',showMap:false},footer:{company:'17 Beauty House',address:'',phone:'',email:'',waNum:'',waMsg:"Hi, I'd like to enquire about your products.",contactEnabled:false,showFaq:false,showTc:false},store:{addr:'',hours:'',phone:'',map:''},faq:[],tc:'',orders:[],customers:[],contactMessages:[],discounts:[],discountEnabled:true,msgTemplates:['Thank you for contacting us! We will reply within 24 hours.'],productLang:'both',popup:{enabled:false,img:'',title:'',titleCn:'',msg:'',msgCn:'',btnText:'Continue Shopping',btnTextCn:'继续购物',showOrder:true},pickupEnabled:true,shopClosed:{enabled:false,titleEn:'Group Buy Has Ended',titleCn:'团购已结束',msgEn:'Thank you for your support! The current group buy has ended. Please follow us for the next round.',msgCn:'感谢您的支持！本次团购已结束，敬请期待下一次团购活动。',img:''}};
 window._S=S;
 
 let _persistFbTimer=null;
@@ -1274,6 +1309,7 @@ window._appInit=function(){
     renderFooter();
     addVarRow();
     loadCU();
+    applyShopClosed();
     showPage('shop');
   }).catch(()=>{
     renderProducts();
@@ -1586,7 +1622,7 @@ function switchProdImg(pid,ii){
 function updVP(id){const p=S.products.find(x=>x.id===id);const s=document.getElementById('var-'+id);const v=p.variants.find(x=>x.name===s.value);document.getElementById('pd-'+id).textContent=v?`RM ${v.price.toFixed(2)}`:dispPrice(p);if(v&&v.img&&(v.img.startsWith('http')||v.img.startsWith('data:'))){const imgEl=document.getElementById('pimg-'+id);if(imgEl)imgEl.innerHTML=`<img src="${v.img}" alt=""/>`;}}
 const QM={};
 function chQ(id,d){QM[id]=Math.max(1,(QM[id]||1)+d);document.getElementById('qty-'+id).textContent=QM[id];}
-function addCart(id){const p=S.products.find(x=>x.id===id);if(!p)return;const isSO=p.stock===0&&!p.oversell;if(isSO){toast('This product is sold out. 此商品已售罄');return;}const s=document.getElementById('var-'+id);const vn=s?s.value:'';if(p.variants&&p.variants.length&&!vn){alert('Please select a variant.');return;}const vd=getVD(p,vn);const qty=QM[id]||1;const key=`${id}|${vn}`;const ex=cart.find(c=>c._key===key);if(ex)ex.qty+=qty;else cart.push({_key:key,id,nameEn:p.nameEn,nameCn:p.nameCn,img:getProdMainImg(p),variation:vn,price:vd.price,weight:vd.weight,shipOverride:vd.shipOverride,qty});QM[id]=1;document.getElementById('qty-'+id).textContent=1;document.getElementById('cartBadge').textContent=cart.reduce((a,c)=>a+c.qty,0);toast('Added to cart! ✓');}
+function addCart(id){if(S.shopClosed&&S.shopClosed.enabled){toast(currentLang==='cn'?'本次团购已结束，感谢支持！':'Group buy has ended. Thank you!');return;}const p=S.products.find(x=>x.id===id);if(!p)return;const isSO=p.stock===0&&!p.oversell;if(isSO){toast('This product is sold out. 此商品已售罄');return;}const s=document.getElementById('var-'+id);const vn=s?s.value:'';if(p.variants&&p.variants.length&&!vn){alert('Please select a variant.');return;}const vd=getVD(p,vn);const qty=QM[id]||1;const key=`${id}|${vn}`;const ex=cart.find(c=>c._key===key);if(ex)ex.qty+=qty;else cart.push({_key:key,id,nameEn:p.nameEn,nameCn:p.nameCn,img:getProdMainImg(p),variation:vn,price:vd.price,weight:vd.weight,shipOverride:vd.shipOverride,qty});QM[id]=1;document.getElementById('qty-'+id).textContent=1;document.getElementById('cartBadge').textContent=cart.reduce((a,c)=>a+c.qty,0);toast('Added to cart! ✓');}
 function toast(msg){const t=document.createElement('div');t.style.cssText='position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#2d6a4f;color:#fff;padding:8px 18px;border-radius:24px;font-size:.85rem;z-index:9999;box-shadow:0 2px 10px rgba(0,0,0,.2)';t.textContent=msg;document.body.appendChild(t);setTimeout(()=>t.remove(),2000);}
 function renderCart(){const c=document.getElementById('cartContent');if(!cart.length){c.innerHTML=`<div class="empty">Your cart is empty. 购物车是空的。</div>`;return;}const sub=cart.reduce((a,x)=>a+x.price*x.qty,0);c.innerHTML=`<table class="cart-table"><thead><tr><th></th><th>Product</th><th>Variant</th><th>Qty</th><th>Unit</th><th>Total</th><th></th></tr></thead><tbody>${cart.map((it,i)=>{const th=it.img&&(it.img.startsWith('http')||it.img.startsWith('data:'))?`<img src="${it.img}" class="cart-thumb">`:`<div class="cart-thumb">${it.img||'📦'}</div>`;return`<tr><td>${th}</td><td><b>${lang==='en'?it.nameEn:it.nameCn}</b></td><td>${it.variation||'—'}</td><td><div class="qty-row"><button onclick="cQ(${i},-1)">−</button><span>${it.qty}</span><button onclick="cQ(${i},1)">+</button></div></td><td>RM ${it.price.toFixed(2)}</td><td>RM ${(it.price*it.qty).toFixed(2)}</td><td><button class="remove-btn" onclick="rmCart(${i})">✕</button></td></tr>`;}).join('')}</tbody></table><div class="summary-box"><div class="s-row"><span>Subtotal</span><span>RM ${sub.toFixed(2)}</span></div><div class="s-row"><span>Shipping (at checkout)</span><span>—</span></div><div class="s-row total"><span>Est. Total</span><span>RM ${sub.toFixed(2)}+</span></div></div><div class="fg" style="margin-top:11px"><label style="font-weight:600;font-size:.85rem;display:block;margin-bottom:5px">📝 Remarks (optional)</label><textarea id="cartRemarks" rows="2" placeholder="e.g. Gift wrap, special instructions..." style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:.86rem"></textarea></div><button class="checkout-btn" onclick="goCheckout()">Proceed to Checkout 继续结账</button>`;}
 function cQ(i,d){cart[i].qty=Math.max(1,cart[i].qty+d);document.getElementById('cartBadge').textContent=cart.reduce((a,c)=>a+c.qty,0);renderCart();}
@@ -2610,7 +2646,7 @@ function exportExcel(){
     });
   });
 }
-function loadAdminInputs(){const sv=(id,val)=>{const el=document.getElementById(id);if(el)el.value=val||'';};sv('fCompany',S.footer.company);sv('fAddress',S.footer.address);sv('fPhone2',S.footer.phone);sv('fEmail2',S.footer.email);sv('fWaNum',S.footer.waNum);sv('fWaMsg',S.footer.waMsg);sv('storeAddr',S.store.addr);sv('storeHours',S.store.hours);sv('storePhone',S.store.phone);sv('storeMap',S.store.map);sv('bShopEn',S.branding.shopEn);sv('bShopCn',S.branding.shopCn);sv('bLogo',S.branding.logo);sv('bColor',S.branding.color);sv('cdLabelInput',S.branding.cdLabel);sv('cdEnd',S.branding.cdEnd);sv('bGoogleMap',S.branding.googleMap);sv('bGoogleMapLabel',S.branding.googleMapLabel);const cdEl=document.getElementById('cdEnabled');if(cdEl)cdEl.checked=S.branding.cdEnabled||false;
+function loadAdminInputs(){loadShopClosedInputs();const sv=(id,val)=>{const el=document.getElementById(id);if(el)el.value=val||'';};sv('fCompany',S.footer.company);sv('fAddress',S.footer.address);sv('fPhone2',S.footer.phone);sv('fEmail2',S.footer.email);sv('fWaNum',S.footer.waNum);sv('fWaMsg',S.footer.waMsg);sv('storeAddr',S.store.addr);sv('storeHours',S.store.hours);sv('storePhone',S.store.phone);sv('storeMap',S.store.map);sv('bShopEn',S.branding.shopEn);sv('bShopCn',S.branding.shopCn);sv('bLogo',S.branding.logo);sv('bColor',S.branding.color);sv('cdLabelInput',S.branding.cdLabel);sv('cdEnd',S.branding.cdEnd);sv('bGoogleMap',S.branding.googleMap);sv('bGoogleMapLabel',S.branding.googleMapLabel);const cdEl=document.getElementById('cdEnabled');if(cdEl)cdEl.checked=S.branding.cdEnabled||false;
   const smEl=document.getElementById('bShowMap');if(smEl)smEl.checked=S.branding.showMap||false;
   const snEl=document.getElementById('bShowShopNow');if(snEl)snEl.checked=S.branding.showShopNow!==false;
   const neEl=document.getElementById('newEmail');if(neEl)neEl.placeholder=`Current: ${S.settings.email}`;
@@ -2659,6 +2695,67 @@ function clearFavicon(){
   // Remove favicon link
   const fl=document.getElementById('faviconLink');if(fl)fl.remove();
   persist();
+}
+function applyShopClosed(){
+  const sc=S.shopClosed||{};
+  const overlay=document.getElementById('shop-closed-overlay');
+  if(!overlay)return;
+  if(sc.enabled){
+    // Update content
+    const t=document.getElementById('shop-closed-title');
+    const m=document.getElementById('shop-closed-msg');
+    const img=document.getElementById('shop-closed-img');
+    const lang=currentLang||'en';
+    if(t)t.textContent=lang==='cn'?(sc.titleCn||'团购已结束'):(sc.titleEn||'Group Buy Has Ended');
+    if(m)m.textContent=lang==='cn'?(sc.msgCn||'感谢您的支持！本次团购已结束。'):(sc.msgEn||'Thank you! This group buy has ended.');
+    if(img){if(sc.img){img.src=sc.img;img.style.display='';}else img.style.display='none';}
+    overlay.style.display='flex';
+  } else {
+    overlay.style.display='none';
+  }
+}
+function toggleShopClosed(v){
+  if(!S.shopClosed)S.shopClosed={};
+  S.shopClosed.enabled=v;
+  const lbl=document.getElementById('shopClosedLabel');
+  if(lbl)lbl.textContent=v?'Closed 已关闭':'Open 营业中';
+  applyShopClosed();
+  persist();
+  showMsg('shopClosedMsg','success',v?'🔒 Shop closed! 店铺已关闭':'✅ Shop open! 店铺已开放');
+}
+function scUploadImg(e){
+  const f=e.target.files[0];if(!f)return;
+  const r=new FileReader();r.onload=ev=>{
+    if(!S.shopClosed)S.shopClosed={};
+    S.shopClosed.img=ev.target.result;
+    const prev=document.getElementById('scImgPreview');
+    if(prev){prev.src=ev.target.result;prev.style.display='';}
+  };r.readAsDataURL(f);
+}
+function saveShopClosed(){
+  if(!S.shopClosed)S.shopClosed={};
+  S.shopClosed.titleEn=document.getElementById('scTitleEn')?.value||'Group Buy Has Ended';
+  S.shopClosed.titleCn=document.getElementById('scTitleCn')?.value||'团购已结束';
+  S.shopClosed.msgEn=document.getElementById('scMsgEn')?.value||'Thank you for your support!';
+  S.shopClosed.msgCn=document.getElementById('scMsgCn')?.value||'感谢您的支持！本次团购已结束。';
+  const urlInp=document.getElementById('scImgUrl')?.value.trim();
+  if(urlInp)S.shopClosed.img=urlInp;
+  applyShopClosed();
+  persist();
+  showMsg('shopClosedMsg','success','✅ Saved! 已保存');
+}
+function loadShopClosedInputs(){
+  const sc=S.shopClosed||{};
+  const tog=document.getElementById('shopClosedToggle');
+  if(tog)tog.checked=sc.enabled||false;
+  const lbl=document.getElementById('shopClosedLabel');
+  if(lbl)lbl.textContent=sc.enabled?'Closed 已关闭':'Open 营业中';
+  const sv=(id,v)=>{const el=document.getElementById(id);if(el)el.value=v||'';};
+  sv('scTitleEn',sc.titleEn);sv('scTitleCn',sc.titleCn);
+  sv('scMsgEn',sc.msgEn);sv('scMsgCn',sc.msgCn);sv('scImgUrl','');
+  const prev=document.getElementById('scImgPreview');
+  if(prev&&sc.img){prev.src=sc.img;prev.style.display='';}
+  else if(prev)prev.style.display='none';
 }
 function saveSettings(){const ne=document.getElementById('newEmail').value.trim();const np=document.getElementById('newPwd').value;if(ne)S.settings.email=ne;if(np)S.settings.password=np;persist();showMsg('settingsMsg','success','Saved!');}
 async function applyManualOrderFix(){
