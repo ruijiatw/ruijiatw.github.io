@@ -1864,7 +1864,7 @@ function renderProductList(){
   if(!S.products.length){el.innerHTML=`<div class="empty">No products.</div>`;return;}
   el.innerHTML=S.products.map(p=>{
     const imgs=p.images&&p.images.length?p.images:p.img?[{url:p.img,selected:true}]:[];
-    const thumbs=imgs.map((img,ii)=>`<div style="position:relative;display:inline-block;margin-right:4px"><img src="${img.url&&(img.url.startsWith('http')||img.url.startsWith('data:'))?img.url:''}" style="width:44px;height:44px;object-fit:cover;border-radius:5px;border:2px solid ${img.selected?'var(--pri)':'var(--border)'}"/><button onclick="epRemoveImg(${p.id},${ii})" style="position:absolute;top:-5px;right:-5px;width:16px;height:16px;background:var(--pri);color:#fff;border:none;border-radius:50%;cursor:pointer;font-size:.65rem;display:flex;align-items:center;justify-content:center">✕</button></div>`).join('');
+    const thumbs=imgs.map((img,ii)=>`<div style="position:relative;display:inline-block;margin-right:4px" title="Click to set as primary 点击设为主图"><img src="${img.url&&(img.url.startsWith('http')||img.url.startsWith('data:'))?img.url:''}" onclick="epSetPrimary(${p.id},${ii})" style="width:44px;height:44px;object-fit:cover;border-radius:5px;border:2px solid ${img.selected?'var(--pri)':'var(--border)'};cursor:pointer" /><button onclick="epRemoveImg(${p.id},${ii})" style="position:absolute;top:-5px;right:-5px;width:16px;height:16px;background:var(--pri);color:#fff;border:none;border-radius:50%;cursor:pointer;font-size:.65rem;display:flex;align-items:center;justify-content:center">✕</button>${img.selected?'<span style="position:absolute;bottom:-2px;left:0;right:0;text-align:center;font-size:.5rem;background:var(--pri);color:#fff;border-radius:0 0 4px 4px">★</span>':''}</div>`).join('');
     return`<div class="pli" style="flex-direction:column;align-items:flex-start;gap:6px">
       <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
         <div style="display:flex;align-items:center;gap:8px">
@@ -1970,6 +1970,17 @@ function epAddImgUrl(pid){
   if(!p.images)p.images=[];
   p.images.push({url,selected:p.images.length===0});
   inp.value='';persist();renderProductList();const panel=document.getElementById('edit-'+pid);if(panel)panel.classList.add('open');
+}
+function epSetPrimary(pid,ii){
+  const p=S.products.find(x=>x.id===pid);if(!p||!p.images)return;
+  // Move selected image to front and set selected=true
+  const sel=p.images.splice(ii,1)[0];
+  p.images.unshift({...sel,selected:true});
+  // Reset others
+  p.images.forEach((im,i)=>{if(i>0)im.selected=false;});
+  if(window._saveProductFb)window._saveProductFb(p).then(()=>persist());else persist();
+  renderProductList();
+  const panel=document.getElementById('edit-'+pid);if(panel)panel.classList.add('open');
 }
 function epRemoveImg(pid,ii){
   const p=S.products.find(x=>x.id===pid);if(!p||!p.images)return;
