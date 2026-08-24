@@ -2057,7 +2057,8 @@ function saveProductEdit(id){
     return n?{name:n,price:pr,weight:w,shipOverride:so!==''&&so!=null?parseFloat(so):null,stock:isNaN(st)?-1:st}:null;
   }).filter(Boolean);
   if(newVars.length)p.variants=newVars;
-  if(window._saveProductFb)window._saveProductFb(p).then(()=>persist());else persist();
+  try{localStorage.setItem('shopv9',JSON.stringify({...S,orderCounter}));}catch(e){}
+  if(window._saveProductFb)window._saveProductFb(p).then(()=>{if(window._fbPersist)window._fbPersist().catch(()=>{});});else persist();
   renderProducts();renderProductList();
   const panel=document.getElementById('edit-'+id);if(panel)panel.classList.add('open');
   showMsg('ep-msg-'+id,'success','Saved!');
@@ -2720,7 +2721,10 @@ function toggleShopClosed(v){
   const lbl=document.getElementById('shopClosedLabel');
   if(lbl)lbl.textContent=v?'Closed 已关闭':'Open 营业中';
   applyShopClosed();
-  persist();
+  // Write localStorage immediately
+  try{localStorage.setItem('shopv9',JSON.stringify({...S,orderCounter}));}catch(e){}
+  // Write Firebase immediately (bypass debounce)
+  if(window._fbPersist)window._fbPersist().catch(e=>console.error('shopClosed persist',e));
   showMsg('shopClosedMsg','success',v?'🔒 Shop closed! 店铺已关闭':'✅ Shop open! 店铺已开放');
 }
 function scUploadImg(e){
@@ -2741,7 +2745,8 @@ function saveShopClosed(){
   const urlInp=document.getElementById('scImgUrl')?.value.trim();
   if(urlInp)S.shopClosed.img=urlInp;
   applyShopClosed();
-  persist();
+  try{localStorage.setItem('shopv9',JSON.stringify({...S,orderCounter}));}catch(e){}
+  if(window._fbPersist)window._fbPersist().catch(()=>{});
   showMsg('shopClosedMsg','success','✅ Saved! 已保存');
 }
 function loadShopClosedInputs(){
