@@ -1070,10 +1070,27 @@ function startPublicSync(){
     S.products.forEach(p=>{if(!p.images)p.images=[];if(p.active==null)p.active=true;if(p.oversell==null)p.oversell=false;if(!p.preOrder)p.preOrder={enabled:false,shipDate:'',note:'',noteCn:''};if(!p.variants)p.variants=[];});
     mergeStockIntoProducts();_loaded.catalog=true;afterPublicData('catalog');
   },e=>bootError(e));
-  FB.onSnapshot(R.stock(),snap=>{
-    S.stock=snap.exists()?(snap.data().items||{}):{};
-    mergeStockIntoProducts();_loaded.stock=true;afterPublicData('stock');
-  },e=>bootError(e));
+  // Stock changes with EVERY order. A live listener would make every visitor re-read it on every
+  // order (1000 visitors × 100 orders = 100k reads). Customers read it once at load and again at
+  // checkout; the order transaction always re-checks stock on the server, so nothing can oversell.
+  // The admin panel keeps a live stock listener (see startAdminSync).
+  loadStockOnce();
+}
+function applyStock(snap){
+  S.stock=snap.exists()?(snap.data().items||{}):{};
+  mergeStockIntoProducts();const first=!_loaded.stock;_loaded.stock=true;afterPublicData('stock');
+}
+async function loadStockOnce(){
+  for(let a=1;a<=4;a++){
+    try{applyStock(await withTimeout(FB.getDoc(R.stock()),15000,'Stock'));return;}
+    catch(e){if(a===4){bootError(e);return;}await new Promise(r=>setTimeout(r,1000*a));}
+  }
+}
+let _stockAt=0;
+async function refreshStock(force){
+  if(!force&&Date.now()-_stockAt<20000)return;   // at most one read per 20s per visitor
+  _stockAt=Date.now();
+  try{applyStock(await withTimeout(FB.getDoc(R.stock()),12000,'Stock'));}catch(e){console.warn('stock refresh',e);}
 }
 let _booted=false;
 function afterPublicData(what){
@@ -1107,6 +1124,7 @@ function isAdminView(){return !!(ADMIN.user&&document.getElementById('page-admin
 let _adminUnsubs=[],_ordersInit=false;
 function startAdminSync(){
   stopAdminSync();_ordersInit=false;
+  _adminUnsubs.push(FB.onSnapshot(R.stock(),applyStock,e=>adminSyncError('stock',e)));
   _adminUnsubs.push(FB.onSnapshot(FB.query(FB.collection(FB.db,'orders'),FB.orderBy('no','desc')),snap=>{
     const added=[];
     snap.docChanges().forEach(ch=>{if(ch.type==='added'&&_ordersInit)added.push(ch.doc.data());});
@@ -1184,6 +1202,7 @@ function showPage(p){
   document.getElementById('nav-'+p)?.classList.add('active');
   if(p==='admin'){const ov=document.getElementById('shop-closed-overlay');if(ov)ov.style.display='none';if(ADMIN.user)showAdminPanel();}
   else applyShopClosed();
+  if((p==='cart'||p==='checkout')&&!ADMIN.user)refreshStock();
   if(p==='cart')renderCart();
   if(p==='account')renderAccountPage();
   if(p==='checkout')renderCheckoutPage();
@@ -1523,7 +1542,7 @@ async function placeOrderTx(d){
     // 5. Writes — all-or-nothing
     tx.set(R.order(d.key),order);
     tx.set(R.counter(),{value:no,lastKey:d.key});
-    tx.set(R.receipt(d.key),{key:d.key,img:d.receipt});
+    // receipt was already saved by saveReceipt(); the security rules refuse an order without it
     tx.set(R.lookup(lookupId),{key:d.key});
     if(stockChanged)tx.set(R.stock(),{items:stockItems,lastKey:d.key});
     if(dc){const h=hashStr(normEmail(d.email));const ub={...(dc.usedBy||{})};ub[h]=(ub[h]||0)+1;tx.update(R.discount(d.discountCode),{used:(dc.used||0)+1,usedBy:ub,lastKey:d.key});}
@@ -1531,22 +1550,43 @@ async function placeOrderTx(d){
     return {status:'created',order};
   });
 }
+// Step 1 of placing an order: save the payment receipt on its own (it is the big part, ~0.5 MB).
+// Rules let it be (re)written only while no order exists for this key, and an order cannot be
+// created unless its receipt exists — so an order can never be saved without its receipt.
+async function saveReceipt(d){
+  if(d._receiptSaved)return 'saved';
+  for(let a=1;;a++){
+    try{await withTimeout(FB.setDoc(R.receipt(d.key),{key:d.key,img:d.receipt}),45000,'Receipt');d._receiptSaved=true;return 'saved';}
+    catch(e){
+      const c=e.code||'';
+      if(c.includes('permission-denied')){
+        // Allowed only while the order does not exist → maybe an earlier attempt already placed it.
+        try{const s=await FB.getDoc(R.order(d.key));if(s.exists())return {status:'exists',order:s.data()};}catch(_){}
+        throw e;
+      }
+      if(c.includes('resource-exhausted')||c.includes('invalid-argument')||a>=4)throw e;
+      await new Promise(r=>setTimeout(r,1500*a));
+    }
+  }
+}
 async function placeOrderWithRetry(d,onAttempt){
+  const rs=await saveReceipt(d); if(rs&&rs.status==='exists')return rs;
+  // Step 2: the order itself — a small transaction (a few KB), so it is quick even when busy.
   // Two kinds of retry:
   //  • busy  — another customer took the next order number between our read and our commit.
   //            Real Firestore evaluates security rules before its own conflict check, so this
   //            arrives as "permission-denied" (counter must be exactly +1). Re-reading and
-  //            trying again with the fresh number is the correct fix. Up to 15 quick retries.
+  //            trying again with the fresh number is the correct fix. Keeps queueing for up to 90 s.
   //  • network — timeouts / unavailable. Up to 4 slower retries.
-  let lastErr,busy=0,net=0;
+  let lastErr,busy=0,net=0;const t0=Date.now();
   while(true){
     try{onAttempt&&onAttempt(net+1,busy);return await withTimeout(placeOrderTx(d),35000,'Order');}
     catch(e){
       lastErr=e;const c=e.code||'';console.warn('order attempt',{busy,net},c||e);
       if(c.startsWith('biz/')||c.includes('resource-exhausted')||c.includes('invalid-argument'))throw e;
       if(c.includes('permission-denied')||c.includes('aborted')||c.includes('failed-precondition')){
-        if(++busy>15)break;
-        await new Promise(r=>setTimeout(r,120+Math.random()*350*Math.min(busy,6)));
+        busy++;if(Date.now()-t0>90000)break;
+        await new Promise(r=>setTimeout(r,100+Math.random()*Math.min(2000,150*Math.pow(1.6,Math.min(busy,8)))));
       }else{
         if(++net>=4)break;
         await new Promise(r=>setTimeout(r,1200*net));
@@ -1571,13 +1611,15 @@ async function submitOrder(){
   const btn=document.getElementById('confirmSubmitBtn');const cancel=document.querySelector('#confirmModal .mbtn-cancel');
   btn.disabled=true;cancel.disabled=true;btn.textContent='Submitting… 提交中';
   try{
-    const res=await placeOrderWithRetry(draft,a=>setSubmitStatus('info',a===1?'⏳ 正在提交订单，请不要关闭页面… Submitting, please keep this page open…':`⏳ 网络不稳定，自动重试中 (${a}/4)… Retrying…`));
+    setSubmitStatus('info','⏳ 正在上传收据，请不要关闭页面… Uploading receipt, please keep this page open…');
+    const res=await placeOrderWithRetry(draft,(a,busy)=>setSubmitStatus('info',a>1?`⏳ 网络不稳定，自动重试中 (${a}/4)… Retrying…`:busy>=3?'⏳ 现在下单的人很多，正在排队处理，请不要关闭页面… Many orders right now — you are in the queue, please keep this page open…':'⏳ 正在提交订单，请不要关闭页面… Submitting, please keep this page open…'));
     onOrderSuccess(res.order);
   }catch(e){
     console.error('submit failed',e);
     const c=e.code||'';
     if(c.startsWith('biz/')){
       lsDel('twdg_pending');_orderKey=null;
+      if(c==='biz/soldout'||c==='biz/unavailable')refreshStock(true);
       if(c==='biz/price'){renderCheckoutSummary();_submitting=false;openConfirmModal();setSubmitStatus('warn',`⚠️ ${esc(e.message)}<br>价格已更新，订单未提交。请检查新的总额后再按确认。<br>Prices changed — order NOT placed. Please check the new total and confirm again.`);return;}
       setSubmitStatus('error',`❌ ${esc(e.message)}<br>订单未提交，请修改购物车。Order NOT placed — please update your cart.`);
       btn.textContent='Confirm & Submit ✅ 确认提交';
