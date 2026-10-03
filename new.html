@@ -1532,14 +1532,25 @@ async function placeOrderTx(d){
   });
 }
 async function placeOrderWithRetry(d,onAttempt){
-  let lastErr;
-  for(let attempt=1;attempt<=4;attempt++){
-    try{onAttempt&&onAttempt(attempt);return await withTimeout(placeOrderTx(d),35000,'Order');}
+  // Two kinds of retry:
+  //  • busy  — another customer took the next order number between our read and our commit.
+  //            Real Firestore evaluates security rules before its own conflict check, so this
+  //            arrives as "permission-denied" (counter must be exactly +1). Re-reading and
+  //            trying again with the fresh number is the correct fix. Up to 15 quick retries.
+  //  • network — timeouts / unavailable. Up to 4 slower retries.
+  let lastErr,busy=0,net=0;
+  while(true){
+    try{onAttempt&&onAttempt(net+1,busy);return await withTimeout(placeOrderTx(d),35000,'Order');}
     catch(e){
-      lastErr=e;console.warn('order attempt',attempt,e);
-      const c=e.code||'';
-      if(c.startsWith('biz/')||c.includes('permission-denied')||c.includes('resource-exhausted')||c.includes('invalid-argument'))throw e;
-      await new Promise(r=>setTimeout(r,1200*attempt));
+      lastErr=e;const c=e.code||'';console.warn('order attempt',{busy,net},c||e);
+      if(c.startsWith('biz/')||c.includes('resource-exhausted')||c.includes('invalid-argument'))throw e;
+      if(c.includes('permission-denied')||c.includes('aborted')||c.includes('failed-precondition')){
+        if(++busy>15)break;
+        await new Promise(r=>setTimeout(r,120+Math.random()*350*Math.min(busy,6)));
+      }else{
+        if(++net>=4)break;
+        await new Promise(r=>setTimeout(r,1200*net));
+      }
     }
   }
   // Last check — did an earlier attempt actually succeed?
