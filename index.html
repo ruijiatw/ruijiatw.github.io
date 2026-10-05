@@ -1028,22 +1028,34 @@ function mergeStockIntoProducts(){
 }
 function productForCatalog(p){
   const c=JSON.parse(JSON.stringify(p));
-  delete c.stock;(c.variants||[]).forEach(v=>delete v.stock);
+  delete c.stock;delete c.stockOps;(c.variants||[]).forEach(v=>delete v.stock);
   return c;
 }
 function stockEntryFor(p){
   const v={};(p.variants||[]).forEach(x=>{v[x.name]=x.stock!=null?x.stock:-1;});
   return {p:p.stock!=null?p.stock:-1,v};
 }
+// Stock entry for a product edit: numbers the admin did NOT change keep the LIVE server value
+// (orders may have reduced stock while the edit form was open); only edited numbers are set.
+function mergeStockEntry(srv,p){
+  const ops=p.stockOps;if(!ops)return stockEntryFor(p);
+  srv=srv||{p:-1,v:{}};const sv=srv.v||{};
+  const e={p:ops.p&&ops.p.set!==undefined?ops.p.set:(srv.p!=null?srv.p:-1),v:{}};
+  (p.variants||[]).forEach(x=>{const op=ops.v[x.name]||{};e.v[x.name]=op.set!==undefined?op.set:(op.keepFrom!=null&&sv[op.keepFrom]!=null?sv[op.keepFrom]:-1);});
+  return e;
+}
 // Read-modify-write the catalog inside a transaction so two admins never overwrite each other.
-async function txSaveProduct(p,{remove=false}={}){
+// keepStock: image/visibility-only saves never touch stock at all.
+async function txSaveProduct(p,{remove=false,keepStock=false}={}){
   await FB.runTransaction(FB.db,async tx=>{
     const cs=await tx.get(R.catalog());const ss=await tx.get(R.stock());
     const list=cs.exists()?(cs.data().products||[]):[];
     const stock=ss.exists()?(ss.data().items||{}):{};
     const i=list.findIndex(x=>x.id===p.id);
     if(remove){if(i>-1)list.splice(i,1);delete stock[p.id];}
-    else{const c=productForCatalog(p);if(i>-1)list[i]=c;else list.push(c);stock[p.id]=stockEntryFor(p);}
+    else{const c=productForCatalog(p);if(i>-1)list[i]=c;else list.push(c);
+      if(keepStock&&stock[p.id]){/* leave live stock exactly as it is */}
+      else stock[p.id]=mergeStockEntry(stock[p.id],p);}
     tx.set(R.catalog(),{products:list,updatedAt:FB.serverTimestamp()});
     tx.set(R.stock(),{items:stock,lastKey:'admin'});
   });
@@ -1153,6 +1165,9 @@ function normalizeOrder(key,o){
   const d=tsToDate(o.createdAt)||(o.dateRaw?new Date(o.dateRaw):new Date());
   return {...o,_key:key,dateRaw:d.toISOString(),date:o.date||d.toLocaleString(),items:o.items||[],subtotal:+o.subtotal||0,shipping:+o.shipping||0,discount:+o.discount||0,total:+o.total||0,accountEmail:o.accountEmail||normEmail(o.email)};
 }
+let _ordersDirty=false;
+document.addEventListener('focusout',e=>{if(!_ordersDirty||!(e.target.closest&&e.target.closest('#ordersList')))return;
+  setTimeout(()=>{const ae=document.activeElement;if(ae&&ae.closest&&ae.closest('#ordersList')&&/INPUT|TEXTAREA|SELECT/.test(ae.tagName))return;_ordersDirty=false;if(isAdminView())applyFilters();},800);});
 let _origTitle=document.title,_newCount=0;
 function notifyNewOrders(list){
   _newCount+=list.length;
@@ -1165,7 +1180,13 @@ function refreshAdminViews(what){
   if(!isAdminView())return;
   const active=document.querySelector('.admin-section.active')?.id||'';
   const modalOpen=document.getElementById('adminOrderModal')?.classList.contains('show');
-  if(what==='orders'){if(active==='tab-orders'&&!modalOpen)applyFilters();if(active==='tab-analytics')renderAnalytics();if(active==='tab-customers')renderCustomerList();}
+  if(what==='orders'){
+    if(active==='tab-orders'&&!modalOpen){
+      // Don't redraw while the admin is typing in the list (e.g. a tracking number) — redraw when they leave the box.
+      const ae=document.activeElement;
+      if(ae&&ae.closest&&ae.closest('#ordersList')&&/INPUT|TEXTAREA|SELECT/.test(ae.tagName))_ordersDirty=true;else applyFilters();
+    }
+    if(active==='tab-analytics')renderAnalytics();if(active==='tab-customers')renderCustomerList();}
   if(what==='customers'&&active==='tab-customers')renderCustomerList();
   if(what==='messages'){const unread=S.contactMessages.filter(m=>!m.read).length;const tb=document.getElementById('tabbtn-messages');if(tb)tb.textContent='Messages'+(unread?` (${unread})`:'');if(active==='tab-messages'&&!document.querySelector('.conv-detail.open'))renderMessagesList();}
   if(what==='discounts'&&active==='tab-discounts')renderDiscountList();
@@ -1482,10 +1503,16 @@ async function placeOrderTx(d){
   return FB.runTransaction(FB.db,async tx=>{
     const oSnap=await tx.get(R.order(d.key));
     if(oSnap.exists())return {status:'exists',order:oSnap.data()};
-    const [cSnap,catSnap,stSnap,dSnap]=await Promise.all([
+    const [cSnap,catSnap,stSnap,dSnap,cfgSnap]=await Promise.all([
       tx.get(R.counter()),tx.get(R.catalog()),tx.get(R.stock()),
-      d.discountCode?tx.get(R.discount(d.discountCode)):Promise.resolve(null)
+      d.discountCode?tx.get(R.discount(d.discountCode)):Promise.resolve(null),
+      tx.get(R.config())
     ]);
+    // Shop status and shipping rates come from the server, not from the customer's (possibly old) page
+    const cfg=cfgSnap.exists()?cfgSnap.data():{};
+    if(cfg.shopClosed&&cfg.shopClosed.enabled)throw bizError('closed','本次团购已结束，暂停下单。The shop is closed — order not placed.');
+    if(d.deliveryMode==='pickup'&&cfg.pickupEnabled===false)throw bizError('pickup','Store pickup is no longer available 自取已关闭 — please choose delivery 请选择快递');
+    const shipping=cfg.shipping||d.shipping;
     const catalog=catSnap.exists()?(catSnap.data().products||[]):[];
     const stockItems=JSON.parse(JSON.stringify(stSnap.exists()?(stSnap.data().items||{}):{}));
     // 1. Build items from LIVE catalog prices
@@ -1519,7 +1546,7 @@ async function placeOrderTx(d){
     }
     // 3. Totals
     const sub=Math.round(items.reduce((a,i)=>a+i.price*i.qty,0)*100)/100;
-    const fee=d.deliveryMode==='pickup'?0:calcFee(d.region,items,d.shipping);
+    const fee=d.deliveryMode==='pickup'?0:calcFee(d.region,items,shipping);
     let disc=0,dc=null;
     if(d.discountCode){
       dc=dSnap&&dSnap.exists()?{...dSnap.data(),code:d.discountCode}:null;
@@ -1613,6 +1640,15 @@ async function submitOrder(){
   try{
     setSubmitStatus('info','⏳ 正在上传收据，请不要关闭页面… Uploading receipt, please keep this page open…');
     const res=await placeOrderWithRetry(draft,(a,busy)=>setSubmitStatus('info',a>1?`⏳ 网络不稳定，自动重试中 (${a}/4)… Retrying…`:busy>=3?'⏳ 现在下单的人很多，正在排队处理，请不要关闭页面… Many orders right now — you are in the queue, please keep this page open…':'⏳ 正在提交订单，请不要关闭页面… Submitting, please keep this page open…'));
+    // If this key already had an order (an earlier attempt that did go through), make sure it is the
+    // SAME cart. If not, that was the customer's previous order: tell them, and keep this cart for a new order.
+    const sig=it=>(it||[]).map(i=>`${i.id}|${i.variation||''}|${i.qty}`).sort().join(',');
+    if(res.status==='exists'&&(sig(res.order.items)!==sig(draft.cart)||Math.abs((+res.order.total||0)-draft.expectedTotal)>0.009)){
+      const keys=lsGet('twdg_orders',[]);if(!keys.includes(res.order.key))keys.unshift(res.order.key);lsSet('twdg_orders',keys.slice(0,50));
+      lsDel('twdg_pending');_orderKey=null;
+      setSubmitStatus('warn',`✅ 您之前的订单 <b>${esc(res.order.id)}</b>（RM ${money(res.order.total)}）其实已经提交成功了。<br>这次的购物车<b>还没有下单</b>，请检查后再按一次确认。<br>Your previous order ${esc(res.order.id)} was already placed. This cart is NOT ordered yet — please confirm again.`);
+      btn.disabled=false;btn.textContent='Confirm & Submit ✅ 确认提交';cancel.disabled=false;return;
+    }
     onOrderSuccess(res.order);
   }catch(e){
     console.error('submit failed',e);
@@ -1621,7 +1657,7 @@ async function submitOrder(){
       lsDel('twdg_pending');_orderKey=null;
       if(c==='biz/soldout'||c==='biz/unavailable')refreshStock(true);
       if(c==='biz/price'){renderCheckoutSummary();_submitting=false;openConfirmModal();setSubmitStatus('warn',`⚠️ ${esc(e.message)}<br>价格已更新，订单未提交。请检查新的总额后再按确认。<br>Prices changed — order NOT placed. Please check the new total and confirm again.`);return;}
-      setSubmitStatus('error',`❌ ${esc(e.message)}<br>订单未提交，请修改购物车。Order NOT placed — please update your cart.`);
+      setSubmitStatus('error',c==='biz/closed'||c==='biz/pickup'?`❌ ${esc(e.message)}`:`❌ ${esc(e.message)}<br>订单未提交，请修改购物车。Order NOT placed — please update your cart.`);
       btn.textContent='Confirm & Submit ✅ 确认提交';
     }else{
       setSubmitStatus('error',`❌ 订单没有提交成功 Order NOT placed.<br>${esc(fbErrText(e))}<br><b>按下面按钮重试，不会重复下单。</b> Retry is safe — it will not create a duplicate.`);
@@ -1698,7 +1734,9 @@ async function loadMyOrders(){
 async function findMyOrder(){
   const raw=(document.getElementById('fo-no').value||'').trim().toUpperCase().replace(/\s/g,'');const ph=digits(document.getElementById('fo-phone').value);
   if(!raw||ph.length<8){showMsg('foMsg','error','Enter order no. and phone. 请输入订单号码和电话。');return;}
-  const id=/^\d+$/.test(raw)?fmtOrderId(parseInt(raw,10)):(raw.startsWith((S.orderPrefix||'TWDG#').toUpperCase())?raw:fmtOrderId(parseInt(digits(raw)||'0',10)));
+  // Accept "1", "00001", "#1", "twdg#1", "TWDG#00001" … → always TWDG#00001
+  const pre=(S.orderPrefix||'TWDG#').toUpperCase();const rest=raw.startsWith(pre)?raw.slice(pre.length):raw;
+  const id=fmtOrderId(parseInt(digits(rest)||'0',10));
   showMsg('foMsg','success','⏳ Searching… 查询中',true);
   try{
     const lk=await withTimeout(FB.getDoc(R.lookup(await sha256(id+'|'+ph))),15000,'Search');
@@ -1871,13 +1909,13 @@ function renderProductList(keepOpen){
         </div>
         <div style="margin-top:9px"><b style="font-size:.82rem">Variants 规格</b>
           <div class="var-table-wrap"><table class="var-table"><thead><tr><th>Name</th><th>Price(RM)</th><th>Weight(g)</th><th>Ship Override</th><th>Stock(-1=∞)</th><th>On</th><th></th></tr></thead>
-          <tbody id="ep-vars-${p.id}">${(p.variants||[]).map((v,vi)=>`<tr><td><input type="text" value="${esc(v.name)}" id="epvn-${p.id}-${vi}"/></td><td><input type="number" value="${v.price}" step="0.01" min="0" id="epvp-${p.id}-${vi}"/></td><td><input type="number" value="${v.weight||0}" min="0" id="epvw-${p.id}-${vi}"/></td><td><input type="number" value="${v.shipOverride!=null?v.shipOverride:''}" step="0.5" min="0" id="epvs-${p.id}-${vi}" placeholder="blank=auto"/></td><td><input type="number" value="${v.stock!=null?v.stock:-1}" min="-1" id="epvst-${p.id}-${vi}" style="width:60px"/></td><td><input type="checkbox" id="epva-${p.id}-${vi}" ${v.active!==false?'checked':''}/></td><td><button class="del-btn" onclick="this.closest('tr').remove()">✕</button></td></tr>`).join('')}</tbody></table></div>
+          <tbody id="ep-vars-${p.id}">${(p.variants||[]).map((v,vi)=>`<tr><td><input type="text" value="${esc(v.name)}" id="epvn-${p.id}-${vi}"/></td><td><input type="number" value="${v.price}" step="0.01" min="0" id="epvp-${p.id}-${vi}"/></td><td><input type="number" value="${v.weight||0}" min="0" id="epvw-${p.id}-${vi}"/></td><td><input type="number" value="${v.shipOverride!=null?v.shipOverride:''}" step="0.5" min="0" id="epvs-${p.id}-${vi}" placeholder="blank=auto"/></td><td><input type="number" value="${v.stock!=null?v.stock:-1}" data-orig="${v.stock!=null?v.stock:-1}" data-oname="${esc(v.name)}" min="-1" id="epvst-${p.id}-${vi}" style="width:60px"/></td><td><input type="checkbox" id="epva-${p.id}-${vi}" ${v.active!==false?'checked':''}/></td><td><button class="del-btn" onclick="this.closest('tr').remove()">✕</button></td></tr>`).join('')}</tbody></table></div>
           <button class="add-var-btn" onclick="addEditVarRow('${p.id}')">+ Add Variant</button>
         </div>
         <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px"><b style="font-size:.82rem;color:var(--sec)">Stock &amp; Availability 库存与上架</b>
           <div class="fr3" style="margin-top:8px">
             <div class="fg"><label>Active (show in shop)</label><div style="display:flex;align-items:center;gap:8px;margin-top:5px"><label class="toggle-sw"><input type="checkbox" id="ep-active-${p.id}" ${p.active!==false?'checked':''}><span class="slider"></span></label><span style="font-size:.8rem">Visible 上架</span></div></div>
-            <div class="fg"><label>Product Stock Qty (-1 = unlimited)</label><input type="number" id="ep-stock-${p.id}" value="${p.stock!=null?p.stock:-1}" min="-1" step="1" style="margin-top:5px"/><div style="display:flex;align-items:center;gap:6px;margin-top:6px"><label class="toggle-sw"><input type="checkbox" id="ep-oversell-${p.id}" ${p.oversell?'checked':''}><span class="slider"></span></label><span style="font-size:.75rem;color:var(--muted)">Continue selling when sold out</span></div></div>
+            <div class="fg"><label>Product Stock Qty (-1 = unlimited)</label><input type="number" id="ep-stock-${p.id}" value="${p.stock!=null?p.stock:-1}" data-orig="${p.stock!=null?p.stock:-1}" min="-1" step="1" style="margin-top:5px"/><div style="display:flex;align-items:center;gap:6px;margin-top:6px"><label class="toggle-sw"><input type="checkbox" id="ep-oversell-${p.id}" ${p.oversell?'checked':''}><span class="slider"></span></label><span style="font-size:.75rem;color:var(--muted)">Continue selling when sold out</span></div></div>
             <div class="fg"><label>Pre-order</label><div style="display:flex;align-items:center;gap:8px;margin-top:5px"><label class="toggle-sw"><input type="checkbox" id="ep-preorder-${p.id}" ${(p.preOrder&&p.preOrder.enabled)?'checked':''} onchange="document.getElementById('ep-preorder-section-${p.id}').style.display=this.checked?'block':'none'"><span class="slider"></span></label><span style="font-size:.8rem">🚀 Pre-order</span></div></div>
           </div>
           <div id="ep-preorder-section-${p.id}" style="display:${(p.preOrder&&p.preOrder.enabled)?'block':'none'};margin-top:8px;background:#fff8e1;border:1px solid #ffe082;border-radius:7px;padding:10px">
@@ -1900,10 +1938,15 @@ async function saveProductEdit(id){
   p.descEn=g('ep-descEn-'+id).value;p.descCn=g('ep-descCn-'+id).value;
   const bp=parseFloat(g('ep-price-'+id).value);p.basePrice=isNaN(bp)?p.basePrice:bp;
   const emo=g('ep-img-'+id).value.trim();if(!isImg(p.img)||emo)p.img=emo||p.img;
-  p.active=g('ep-active-'+id).checked;const sv=parseInt(g('ep-stock-'+id).value);p.stock=isNaN(sv)?-1:sv;p.oversell=g('ep-oversell-'+id).checked;
+  p.active=g('ep-active-'+id).checked;const psi=g('ep-stock-'+id);const sv=parseInt(psi.value);p.stock=isNaN(sv)?-1:sv;p.oversell=g('ep-oversell-'+id).checked;
+  // Only stock numbers the admin actually changed are written; untouched ones keep the live value.
+  p.stockOps={p:String(p.stock)===psi.dataset.orig?{}:{set:p.stock},v:{}};
   p.preOrder={enabled:g('ep-preorder-'+id).checked,shipDate:g('ep-shipdate-'+id).value||'',note:g('ep-ponote-'+id).value||'',noteCn:g('ep-ponotecn-'+id).value||''};
   const rows=document.querySelectorAll(`#ep-vars-${id} tr`);
-  p.variants=Array.from(rows).map(tr=>{const ins=tr.querySelectorAll('input');const n=ins[0].value.trim();if(!n)return null;const st=parseInt(ins[4].value);const old=(cur.variants||[]).find(v=>v.name===n)||{};return{...old,name:n,price:parseFloat(ins[1].value)||0,weight:parseInt(ins[2].value)||0,shipOverride:ins[3].value!==''?parseFloat(ins[3].value):null,stock:isNaN(st)?-1:st,active:ins[5].checked};}).filter(Boolean);
+  p.variants=Array.from(rows).map(tr=>{const ins=tr.querySelectorAll('input');const n=ins[0].value.trim();if(!n)return null;const st=parseInt(ins[4].value);const stock=isNaN(st)?-1:st;
+    const orig=ins[4].dataset.orig,oname=ins[4].dataset.oname;
+    p.stockOps.v[n]=(orig!==undefined&&String(stock)===orig)?{keepFrom:oname}:{set:stock};
+    const old=(cur.variants||[]).find(v=>v.name===(oname||n))||{};return{...old,name:n,price:parseFloat(ins[1].value)||0,weight:parseInt(ins[2].value)||0,shipOverride:ins[3].value!==''?parseFloat(ins[3].value):null,stock,active:ins[5].checked};}).filter(Boolean);
   const names=p.variants.map(v=>v.name);if(new Set(names).size!==names.length){showMsg('ep-msg-'+id,'error','Variant names must be unique. 规格名称不能重复。');return;}
   if(await saveOp(()=>txSaveProduct(p),'ep-msg-'+id,'✅ Saved to Firebase 已保存'))setTimeout(()=>{renderProductList(id);showMsg('ep-msg-'+id,'success','✅ Saved to Firebase 已保存');},400);
 }
@@ -1912,7 +1955,7 @@ async function saveProductImages(id,mutate,msgOk){
   const cur=S.products.find(x=>x.id===id);if(!cur)return false;
   const p=JSON.parse(JSON.stringify(cur));p.images=p.images||[];mutate(p.images);
   if(p.images.length&&!p.images.some(i=>i.selected))p.images[0].selected=true;
-  const ok=await saveOp(()=>txSaveProduct(p),'ep-imgmsg-'+id,msgOk||'✅ Images saved 图片已保存');
+  const ok=await saveOp(()=>txSaveProduct(p,{keepStock:true}),'ep-imgmsg-'+id,msgOk||'✅ Images saved 图片已保存');
   if(ok){cur.images=p.images;const box=document.getElementById('ep-imgs-'+id);if(box)box.innerHTML=epThumbs(cur);}
   return ok;
 }
@@ -1996,6 +2039,8 @@ function renderOrdersList(){applyFilters();}
 function renderOrdersFromList(orders){
   const el=document.getElementById('ordersList');
   if(!orders.length){el.innerHTML=`<div class="empty">${S.orders.length?'No orders match. 没有符合的订单。':'No orders yet. 暂无订单。'}</div>`;return;}
+  const typed={};el.querySelectorAll('input[id^="trk-"]').forEach(i=>{if(i.value!==i.defaultValue)typed[i.id]=i.value;});
+  const focusId=document.activeElement&&el.contains(document.activeElement)?document.activeElement.id:null;
   el.innerHTML=orders.map(o=>{
     const cls=o.status==='shipped'?'shipped':o.status==='ready'?'ready':o.status==='confirmed'?'confirmed':'';
     const tb=o.tracking?`<div style="margin-top:4px"><span style="padding:2px 8px;border-radius:20px;font-size:.74rem;font-weight:600;background:${o.status==='ready'?'#d1e7dd':'#cfe2ff'};color:${o.status==='ready'?'#0f5132':'#084298'}">${o.status==='ready'?'🏪 Ready: ':'📦 '}${esc(o.tracking)}</span></div>`:'';
@@ -2015,6 +2060,9 @@ function renderOrdersFromList(orders){
         ${o.status!=='archived'?`<button onclick="archiveOrder('${o._key}')" style="padding:4px 10px;background:#6c757d;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:.74rem">🗄 Archive</button>`:`<button onclick="unarchiveOrder('${o._key}')" style="padding:4px 10px;background:#457b9d;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:.74rem">↩ Unarchive</button>`}
       </div></div>`;
   }).join('');
+  // put back anything the admin had typed but not saved yet (tracking numbers)
+  Object.entries(typed).forEach(([id,v])=>{const i=document.getElementById(id);if(i)i.value=v;});
+  if(focusId){const i=document.getElementById(focusId);if(i){i.focus();try{i.setSelectionRange(i.value.length,i.value.length);}catch(e){}}}
 }
 const _receiptCache={};
 async function getReceipt(key){if(_receiptCache[key]!==undefined)return _receiptCache[key];const s=await withTimeout(FB.getDoc(R.receipt(key)),20000,'Receipt');_receiptCache[key]=s.exists()?(s.data().img||''):'';return _receiptCache[key];}
@@ -2165,7 +2213,13 @@ async function exportExcel(ev){
   const withReceipts=confirm(`Export ${orders.length} orders.\nInclude receipt images? (uses ${orders.length} Firebase reads)\n包含收据图片吗？\n\nOK = Yes 包含   Cancel = No 不包含`);
   try{
     const receipts={};
-    if(withReceipts){let n=0;for(let i=0;i<orders.length;i+=10){await Promise.all(orders.slice(i,i+10).map(async o=>{try{receipts[o._key]=await getReceipt(o._key);}catch(e){receipts[o._key]='';}n++;if(btn)btn.textContent=`⏳ ${n}/${orders.length}`;}));}}
+    const failed=[];
+    if(withReceipts){let n=0;for(let i=0;i<orders.length;i+=10){await Promise.all(orders.slice(i,i+10).map(async o=>{
+      let src='';for(let a=1;a<=2&&!src;a++){try{src=await getReceipt(o._key);}catch(e){delete _receiptCache[o._key];}}
+      if(!src&&o.hasReceipt!==false)failed.push(o.id);
+      // Smaller copy for Excel (≈100 KB) so 300+ orders still make a file Excel can open. Full size stays in Firebase.
+      if(src){try{src=await compressDataURL(src,800,140000);}catch(e){}}
+      receipts[o._key]=src;n++;if(btn)btn.textContent=`⏳ ${n}/${orders.length}`;}));}}
     const wb=new ExcelJS.Workbook();const ws=wb.addWorksheet('Orders');
     ws.columns=[{header:'Order No.',key:'id',width:14},{header:'Date',key:'date',width:22},{header:'Status',key:'status',width:14},{header:'Delivery',key:'delivery',width:10},{header:'Tracking',key:'tracking',width:18},{header:'Customer',key:'customer',width:20},{header:'Phone',key:'phone',width:14},{header:'Email',key:'email',width:26},{header:'Postcode',key:'postcode',width:10},{header:'Address',key:'addr',width:30},{header:'Region',key:'region',width:18},{header:'Remarks',key:'remarks',width:20},{header:'Product',key:'product',width:26},{header:'Variant',key:'variant',width:14},{header:'Unit Price (RM)',key:'unitprice',width:14},{header:'Qty',key:'qty',width:6},{header:'Item Total (RM)',key:'itemtotal',width:14},{header:'Subtotal (RM)',key:'subtotal',width:13},{header:'Shipping (RM)',key:'shipping',width:13},{header:'Discount (RM)',key:'discount',width:13},{header:'Order Total (RM)',key:'total',width:15},{header:'Bank',key:'bank',width:14},{header:'Bank Holder Name',key:'bankHolder',width:22},{header:'Bank Ref No.',key:'ref',width:16},{header:'Label',key:'label',width:12},{header:'Receipt',key:'receipt',width:40}];
     const hdr=ws.getRow(1);hdr.font={bold:true,color:{argb:'FFFFFFFF'}};hdr.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF457B9D'}};hdr.alignment={vertical:'middle',horizontal:'center'};hdr.height=20;
@@ -2183,7 +2237,8 @@ async function exportExcel(ev){
     });});
     const buf=await wb.xlsx.writeBuffer();const blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
     const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='Orders_'+new Date().toISOString().slice(0,10)+'.xlsx';document.body.appendChild(a);a.click();setTimeout(()=>{a.remove();URL.revokeObjectURL(a.href);},1500);
-    toast(`✅ Exported ${orders.length} orders`);
+    if(failed.length)alert(`⚠️ Exported ${orders.length} orders, but ${failed.length} receipt image(s) could not be loaded (network): ${failed.slice(0,20).join(', ')}${failed.length>20?' …':''}\n${failed.length} 张收据图片读取失败（网络问题），请稍后再导出一次。订单资料本身完整。`);
+    else toast(`✅ Exported ${orders.length} orders`);
   }catch(e){console.error(e);alert('Export failed: '+e.message);}
   restore();
 }
