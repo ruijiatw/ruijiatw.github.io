@@ -1018,7 +1018,13 @@ const R={
 // (e.g. a bank account number). If someone else changed it, the form reloads with the latest data.
 const _cfgBase={};
 const _cfgRender={};
-function cfgNorm(k,v){v=v===undefined?JSON.parse(JSON.stringify(DEFAULT_CONFIG[k]??null)):v;if(k==='faq'&&Array.isArray(v))v=v.map(f=>({...f,active:f.active==null?true:f.active}));return JSON.stringify(v);}
+// Same shape the page uses (defaults filled in the same way as applyConfig), compared with sorted keys,
+// so field order or missing defaults never cause a false "someone else changed it".
+function cfgShape(k,v){const def=DEFAULT_CONFIG[k];if(v===undefined||v===null)v=JSON.parse(JSON.stringify(def??null));
+  else if(def&&typeof def==='object'&&!Array.isArray(def)&&k!=='shipping')v={...def,...v};
+  if(k==='faq'&&Array.isArray(v))v=v.map(f=>({...f,active:f.active==null?true:f.active}));return v;}
+function stableStr(v){if(Array.isArray(v))return '['+v.map(stableStr).join(',')+']';if(v&&typeof v==='object')return '{'+Object.keys(v).sort().filter(k=>v[k]!==undefined).map(k=>JSON.stringify(k)+':'+stableStr(v[k])).join(',')+'}';return JSON.stringify(v===undefined?null:v);}
+function cfgNorm(k,v){return stableStr(cfgShape(k,v));}
 function cfgSnap(k){_cfgBase[k]=cfgNorm(k,JSON.parse(JSON.stringify(S[k]??null)));}
 async function saveConfig(fields,msgId,okText){
   const clean=JSON.parse(JSON.stringify(fields));
@@ -1031,7 +1037,8 @@ async function saveConfig(fields,msgId,okText){
       tx.set(R.config(),clean,{mergeFields:Object.keys(clean)});
     });
   },msgId,okText);
-  if(ok)guard.forEach(k=>{_cfgBase[k]=cfgNorm(k,clean[k]);});
+  // show our own change straight away (the live update from the server arrives a moment later with the same data)
+  if(ok){Object.keys(clean).forEach(k=>{if(CONFIG_KEYS.includes(k))S[k]=cfgShape(k,JSON.parse(JSON.stringify(clean[k])));});guard.forEach(k=>{_cfgBase[k]=cfgNorm(k,clean[k]);});}
   else if(guard.length){setTimeout(()=>guard.forEach(k=>{try{_cfgRender[k]&&_cfgRender[k]();}catch(e){}}),2500);}
   return ok;
 }
@@ -1385,6 +1392,7 @@ function addToCart(id,vn,qty){
   const act=(p.variants||[]).filter(v=>v.active!==false);
   if(act.length&&!vn){alert('Please select a variant. 请选择规格。');return false;}
   if(isSoldOut(p)){toast('Sold out 已售罄',2200,'#c1121f');return false;}
+  if(!cart.some(c=>c.id===id)&&new Set(cart.map(c=>c.id)).size>=20){toast('一张订单最多 20 种产品，请分开下单。Max 20 different products per order.',3500,'#c1121f');return false;}
   const av=availQty(p,vn||null);
   if(!p.oversell&&av!==-1&&inCartQty(id,vn||'')+qty>av){toast(av<=0?'Sold out 已售罄':`Only ${av} left 仅剩${av}件`,2500,'#c1121f');return false;}
   const key=`${id}|${vn||''}`;const ex=cart.find(c=>c._key===key);
@@ -1600,12 +1608,13 @@ async function placeOrderTx(d){
     if(Math.abs(total-d.expectedTotal)>0.009)throw bizError('price',`Price updated 价格已更新: RM ${money(total)}`,{newTotal:total});
     // 4. Order number
     const no=(cSnap.exists()?(+cSnap.data().value||0):0)+1;
+    d._seenNo=no;   // lets the retry loop tell 'someone else took this number' from 'refused for another reason'
     const id=fmtOrderId(no);
     const order={key:d.key,no,id,status:'pending',tracking:'',label:'',isNew:true,hasReceipt:true,
       name:d.name,phone:d.phone,email:d.email,accountEmail:normEmail(d.email),postcode:d.postcode,addr:d.addr,
       region:d.deliveryMode==='pickup'?'Pickup':d.region,deliveryMode:d.deliveryMode,
       custBank:d.custBank,custBankHolder:d.custBankHolder,ref:d.ref,remarks:d.remarks,
-      items,subtotal:sub,shipping:fee,discount:disc,discountCode:d.discountCode||'',total,
+      items,stockItems:items.map(i=>({id:i.id,nameEn:i.nameEn,variation:i.variation,qty:i.qty})),subtotal:sub,shipping:fee,discount:disc,discountCode:d.discountCode||'',total,
       date:d.date,dateRaw:d.dateRaw,createdAt:FB.serverTimestamp()};
     const lookupId=await sha256(id+'|'+digits(d.phone));
     // 5. Writes — all-or-nothing
@@ -1647,7 +1656,7 @@ async function placeOrderWithRetry(d,onAttempt){
   //            arrives as "permission-denied" (counter must be exactly +1). Re-reading and
   //            trying again with the fresh number is the correct fix. Keeps queueing for up to 150 s.
   //  • network — timeouts / unavailable. Up to 4 slower retries.
-  let lastErr,busy=0,net=0;const t0=Date.now();
+  let lastErr,busy=0,net=0,sameNo=0,prevNo=null;const t0=Date.now();
   while(true){
     try{onAttempt&&onAttempt(net+1,busy);return await withTimeout(placeOrderTx(d),35000,'Order');}
     catch(e){
@@ -1655,6 +1664,8 @@ async function placeOrderWithRetry(d,onAttempt){
       if(c.startsWith('biz/')||c.includes('resource-exhausted')||c.includes('invalid-argument'))throw e;
       if(c.includes('permission-denied')||c.includes('aborted')||c.includes('failed-precondition')){
         busy++;if(Date.now()-t0>150000){lastErr=Object.assign(new Error('busy'),{code:'busy'});break;}
+        // Refused again with the SAME next number → nobody else is ordering, so it is not a queue: stop waiting.
+        if(c.includes('permission-denied')){sameNo=(d._seenNo!=null&&d._seenNo===prevNo)?sameNo+1:0;prevNo=d._seenNo;if(sameNo>=4)break;}
         await new Promise(r=>setTimeout(r,100+Math.random()*Math.min(2000,150*Math.pow(1.6,Math.min(busy,8)))));
       }else{
         if(++net>=4)break;
@@ -1698,11 +1709,12 @@ async function submitOrder(){
     if(c.startsWith('biz/')){
       // Nothing was ordered. Keep the same order key, so the receipt already uploaded is simply re-used (no duplicates, no orphan receipts).
       if(c==='biz/soldout'||c==='biz/unavailable')refreshStock(true);
+      if(c==='biz/discount'){_submitting=false;if(appliedDiscount)await applyDiscount(true);renderCheckoutSummary();openConfirmModal();setSubmitStatus('warn',`⚠️ ${esc(e.message)}<br>折扣码已不能用，订单未提交。请检查新的总额后再按确认。<br>Discount no longer valid — order NOT placed. Check the new total and confirm again.`);return;}
       if(c==='biz/price'){_submitting=false;if(appliedDiscount)await applyDiscount(true);renderCheckoutSummary();openConfirmModal();setSubmitStatus('warn',`⚠️ ${esc(e.message)}<br>价格已更新，订单未提交。请检查新的总额后再按确认。<br>Prices changed — order NOT placed. Please check the new total and confirm again.`);return;}
       setSubmitStatus('error',c==='biz/closed'||c==='biz/pickup'?`❌ ${esc(e.message)}`:`❌ ${esc(e.message)}<br>订单未提交，请修改购物车。Order NOT placed — please update your cart.`);
       btn.textContent='Confirm & Submit ✅ 确认提交';
     }else{
-      const why=e.code==='busy'?'现在下单的人非常多，系统排队太久。Too many orders right now.':fbErrText(e);
+      const why=e.code==='busy'?'现在下单的人非常多，系统排队太久。Too many orders right now.':(e.code||'').includes('permission-denied')?'系统暂时无法接受这张订单，请稍后再试，或联系我们。The order could not be accepted — please try again later or contact us.':fbErrText(e);
       setSubmitStatus('error',`❌ 订单没有提交成功 Order NOT placed.<br>${esc(why)}<br><b>按下面按钮重试，不会重复下单。</b> Retry is safe — it will not create a duplicate.`);
       btn.disabled=false;btn.textContent='🔄 Retry 重试';
     }
@@ -1782,10 +1794,14 @@ async function findMyOrder(){
   const id=fmtOrderId(parseInt(digits(rest)||'0',10));
   showMsg('foMsg','success','⏳ Searching… 查询中',true);
   try{
-    const lk=await withTimeout(FB.getDoc(R.lookup(await sha256(id+'|'+ph))),15000,'Search');
+    // Also try the number exactly as typed and the original format, so orders placed before the
+    // order-number format was changed in Settings can still be found.
+    const typed=(document.getElementById('fo-no').value||'').trim().replace(/\s/g,'');const n=parseInt(digits(rest)||'0',10);
+    const cands=[...new Set([id,typed,typed.toUpperCase(),'TWDG#'+String(n).padStart(5,'0')])].filter(Boolean).slice(0,4);
+    let lk=null,hit=id;for(const c of cands){lk=await withTimeout(FB.getDoc(R.lookup(await sha256(c+'|'+ph))),15000,'Search');if(lk.exists()){hit=c;break;}}
     if(!lk.exists()){showMsg('foMsg','error',`Not found 找不到: ${id} — please check order no. & phone 请检查号码和电话`);return;}
     const key=lk.data().key;const keys=lsGet('twdg_orders',[]);if(!keys.includes(key))keys.unshift(key);lsSet('twdg_orders',keys);
-    showMsg('foMsg','success','✅ Found 找到 '+id);await loadMyOrders();viewOrderDetail(key);
+    showMsg('foMsg','success','✅ Found 找到 '+hit);await loadMyOrders();viewOrderDetail(key);
   }catch(e){showMsg('foMsg','error','❌ '+fbErrText(e));}
 }
 function viewOrderDetail(key){
@@ -1849,7 +1865,7 @@ function showAdminPanel(){
   document.getElementById('adminWho').textContent=ADMIN.user?ADMIN.user.email:'';const w2=document.getElementById('adminWho2');if(w2)w2.textContent=ADMIN.user?ADMIN.user.email:'';
   ensureConfigDoc();
   renderProductList();renderShippingForm();renderBankAdmin();loadAdminInputs();loadPopupAdminInputs();renderColorSwatches();renderFaqAdmin();renderSlideEditorList();
-  document.getElementById('tcText').value=S.tc||'';renderDiscountList();
+  loadTcInput();renderDiscountList();
   applyFilters();renderCustomerList();renderMessagesList();
 }
 function hideAdminPanel(){window._adminLoggedIn=false;const lw=document.getElementById('adminLoginWrap');if(lw)lw.style.display='';const ap=document.getElementById('adminPanel');if(ap)ap.style.display='none';}
@@ -1861,9 +1877,10 @@ async function ensureConfigDoc(){
     const c=await FB.getDoc(R.counter());if(!c.exists()){await FB.setDoc(R.counter(),{value:0,lastKey:''});}
   }catch(e){_cfgEnsured=false;adminSyncError('setup',e);}
 }
+function loadTcInput(){const el=document.getElementById('tcText');if(el)el.value=S.tc||'';cfgSnap('tc');_cfgRender.tc=loadTcInput;}
 function adminTab(t,btn){document.querySelectorAll('.admin-section').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.tab-btn').forEach(x=>x.classList.remove('active'));document.getElementById('tab-'+t).classList.add('active');btn.classList.add('active');
   if(t==='orders')applyFilters();if(t==='products')renderProductList();if(t==='shipping')renderShippingForm();if(t==='customers')renderCustomerList();if(t==='messages')renderMessagesList();if(t==='analytics'){applyAnRangePreset();}if(t==='bank')renderBankAdmin();
-  if(t==='footer'){renderFaqAdmin();loadAdminInputs();document.getElementById('tcText').value=S.tc||'';}
+  if(t==='footer'){renderFaqAdmin();loadAdminInputs();loadTcInput();}
   if(t==='branding'){loadAdminInputs();renderColorSwatches();renderSlideEditorList();}
   if(t==='discounts')renderDiscountList();if(t==='popup')loadPopupAdminInputs();if(t==='settings'){loadAdminInputs();loadGithubInputs();}}
 
@@ -1918,7 +1935,8 @@ async function addProduct(){
     document.getElementById('variantRows').innerHTML='';addVarRow();
   }
 }
-function epThumbs(p){const imgs=p.images||[];return imgs.map((img,ii)=>`<div style="position:relative;display:inline-block;margin-right:4px" title="Click to set as primary 点击设为主图"><img src="${esc(IS(img.url))}" onclick="epSetPrimary('${p.id}',${ii})" style="width:52px;height:52px;object-fit:cover;border-radius:5px;border:2px solid ${img.selected?'var(--pri)':'var(--border)'};cursor:pointer;background:#f0f0f0" onerror="this.style.opacity=.35;this.title='Publishing… 发布中 (~1 min)'"/><button onclick="epRemoveImg('${p.id}',${ii})" style="position:absolute;top:-5px;right:-5px;width:16px;height:16px;background:var(--pri);color:#fff;border:none;border-radius:50%;cursor:pointer;font-size:.65rem;display:flex;align-items:center;justify-content:center">✕</button>${img.selected?'<span style="position:absolute;bottom:-2px;left:0;right:0;text-align:center;font-size:.5rem;background:var(--pri);color:#fff;border-radius:0 0 4px 4px">★</span>':''}</div>`).join('')||'<span class="hint">No images yet 暂无图片</span>';}
+const _epShown={};
+function epThumbs(p){const imgs=p.images||[];_epShown[p.id]=imgs.map(i=>i.url);return imgs.map((img,ii)=>`<div style="position:relative;display:inline-block;margin-right:4px" title="Click to set as primary 点击设为主图"><img src="${esc(IS(img.url))}" onclick="epSetPrimary('${p.id}',${ii})" style="width:52px;height:52px;object-fit:cover;border-radius:5px;border:2px solid ${img.selected?'var(--pri)':'var(--border)'};cursor:pointer;background:#f0f0f0" onerror="this.style.opacity=.35;this.title='Publishing… 发布中 (~1 min)'"/><button onclick="epRemoveImg('${p.id}',${ii})" style="position:absolute;top:-5px;right:-5px;width:16px;height:16px;background:var(--pri);color:#fff;border:none;border-radius:50%;cursor:pointer;font-size:.65rem;display:flex;align-items:center;justify-content:center">✕</button>${img.selected?'<span style="position:absolute;bottom:-2px;left:0;right:0;text-align:center;font-size:.5rem;background:var(--pri);color:#fff;border-radius:0 0 4px 4px">★</span>':''}</div>`).join('')||'<span class="hint">No images yet 暂无图片</span>';}
 const _epBase={};   // product as shown in its edit form (what the admin started from)
 function renderProductList(keepOpen){
   const el=document.getElementById('productList');if(!el)return;
@@ -2029,7 +2047,8 @@ async function epUploadImgs(pid,e){
     if(errs.length)showMsg('ep-imgmsg-'+pid,'error',`❌ ${errs.length}/${files.length} 张上传失败（${urls.length} 张已保存）: `+errs.join(' | '),true);
   }catch(err){showMsg('ep-imgmsg-'+pid,'error','❌ '+err.message,true);}
 }
-const epImgUrl=(pid,ii)=>((S.products.find(x=>x.id===pid)||{}).images||[])[ii]?.url;
+async function epAddImgUrl(pid){const inp=document.getElementById('ep-imgurl-'+pid);const url=(inp?.value||'').trim();if(!isImg(url)){showMsg('ep-imgmsg-'+pid,'error','Paste a full https:// image URL 请贴完整图片网址');return;}if(await saveProductImages(pid,imgs=>{if(!imgs.some(x=>x.url===url))imgs.push({url,selected:false});}))inp.value='';}
+const epImgUrl=(pid,ii)=>(_epShown[pid]||[])[ii];
 function epSetPrimary(pid,ii){const u=epImgUrl(pid,ii);saveProductImages(pid,imgs=>{const j=imgs.findIndex(x=>x.url===u);if(j<0)return;const sel=imgs.splice(j,1)[0];imgs.forEach(i=>i.selected=false);imgs.unshift({...sel,selected:true});});}
 function epRemoveImg(pid,ii){if(!confirm('Remove this image? 移除此图片？'))return;const u=epImgUrl(pid,ii);saveProductImages(pid,imgs=>{const j=imgs.findIndex(x=>x.url===u);if(j>-1)imgs.splice(j,1);});}
 async function delProd(id){const p=S.products.find(x=>x.id===id);if(!p||!confirm(`Delete "${p.nameEn}"? 删除此产品？`))return;await saveOp(()=>txSaveProduct(p,{remove:true}),null,'🗑 Product deleted 已删除');}
@@ -2135,7 +2154,16 @@ async function loadReceiptInto(key,elId,big){
   catch(e){el.innerHTML=`<span style="color:var(--pri);font-size:.8rem">❌ ${esc(fbErrText(e))}</span> <button class="edit-btn" onclick="loadReceiptInto('${key}','${elId}',${!!big})">Retry</button>`;}
 }
 function openImg(src){const w=window.open();if(w){w.document.write(`<title>Receipt</title><body style="margin:0;background:#222;display:flex;justify-content:center"><img src="${src}" style="max-width:100%"></body>`);}}
-async function updOrder(key,fields,okText){return saveOp(()=>FB.updateDoc(R.order(key),fields),null,okText||'✅ Order updated 订单已更新');}
+// Order updates check the LATEST server copy first: an order another admin has just cancelled
+// can't be silently re-activated from an older screen (that would let its stock be returned twice).
+function guardedOrderUpdate(key,fields,allowCancelled){
+  return FB.runTransaction(FB.db,async tx=>{
+    const os=await tx.get(R.order(key));if(!os.exists())throw prodErr('订单不存在 Order not found.');
+    if(os.data().status==='cancelled'&&!allowCancelled)throw prodErr('这张订单刚被其他管理员取消了，没有更改。This order was just cancelled by another admin — nothing changed.');
+    tx.update(R.order(key),fields);
+  });
+}
+async function updOrder(key,fields,okText){return saveOp(()=>guardedOrderUpdate(key,fields),null,okText||'✅ Order updated 订单已更新');}
 function confirmO(key){updOrder(key,{status:'confirmed',isNew:false});}
 function setTrack(key){const t=document.getElementById('trk-'+key)?.value.trim();if(!t){toast('Enter tracking no. 请输入单号',2500,'#c1121f');return;}updOrder(key,{tracking:t,status:'shipped',isNew:false});}
 function markReady(key){const n=document.getElementById('trk-'+key)?.value.trim()||'Ready for pickup';updOrder(key,{tracking:n,status:'ready',isNew:false});}
@@ -2143,7 +2171,7 @@ function markReady(key){const n=document.getElementById('trk-'+key)?.value.trim(
 function orderStockChange(o,items,sign,catalog){
   // Same rules as when the order was placed: tracked variant stock and tracked product stock (-1 = unlimited, never touched).
   const perProd={};const miss=[],short=[];const cat=catalog||[];
-  (o.items||[]).forEach(it=>{const st=items[it.id];if(!st){miss.push(it.nameEn||it.id);return;}
+  (o.stockItems||o.items||[]).forEach(it=>{const st=items[it.id];if(!st){miss.push(it.nameEn||it.id);return;}
     const q=+it.qty||0;const os=(cat.find(p=>p.id===it.id)||{}).oversell;
     if(st.v&&it.variation&&st.v[it.variation]!=null&&st.v[it.variation]!==-1){const have=st.v[it.variation];
       if(sign>0)st.v[it.variation]=have+q;else{if(have<q&&!os)short.push(`${it.nameEn} (${it.variation}) — 剩 ${have}`);st.v[it.variation]=Math.max(0,have-q);}}
@@ -2159,7 +2187,7 @@ async function cancelOrder(key){
   const ok=await saveOp(()=>FB.runTransaction(FB.db,async tx=>{
     const os=await tx.get(R.order(key));const ss=await tx.get(R.stock());
     if(!os.exists())throw prodErr('订单不存在 Order not found.');
-    const od=os.data();if(od.status==='cancelled')throw prodErr('这张订单已经取消了（库存之前已加回）。This order is already cancelled.');
+    const od=os.data();if(od.status==='cancelled'||od.restocked===true)throw prodErr('这张订单已经取消过，库存之前已加回。This order was already cancelled and restocked.');
     const items=JSON.parse(JSON.stringify(ss.exists()?(ss.data().items||{}):{}));
     miss=orderStockChange(od,items,+1).miss;
     tx.update(R.order(key),{status:'cancelled',prevStatus:od.status,restocked:true,cancelledAt:FB.serverTimestamp(),isNew:false});
@@ -2229,7 +2257,8 @@ async function adminSaveOrder(key){
   else{delete f.subtotal;delete f.total;}
   if(!Object.keys(f).length){showMsg('eo-msg','success','No changes 没有改动');setTimeout(closeOrderModal,700);return;}
   f.isNew=false;f.updatedAt=FB.serverTimestamp();
-  if(await saveOp(()=>FB.updateDoc(R.order(key),f),'eo-msg','✅ Order saved to Firebase 已保存')){_eoBase=null;setTimeout(closeOrderModal,900);}
+  const wasCancelled=(_eoBase&&_eoBase.f&&_eoBase.f.status)==='cancelled';
+  if(await saveOp(()=>guardedOrderUpdate(key,f,wasCancelled),'eo-msg','✅ Order saved to Firebase 已保存')){_eoBase=null;setTimeout(closeOrderModal,900);}
 }
 
 // ── Customers (built from Firebase customer records + their orders) ──
@@ -2410,6 +2439,7 @@ function saveFooterToggles(){saveConfig({footer:{...S.footer,showFaq:document.ge
 function saveTc(){saveConfig({tc:document.getElementById('tcText').value},'tcMsg');}
 // ── Admin inputs ──
 function loadAdminInputs(){
+  ['footer','store','branding'].forEach(k=>{cfgSnap(k);_cfgRender[k]=loadAdminInputs;});
   const sv=(id,val)=>{const el=document.getElementById(id);if(el)el.value=val??'';};const ck=(id,val)=>{const el=document.getElementById(id);if(el)el.checked=!!val;};
   const f=S.footer,b=S.branding,st=S.store;
   sv('fCompany',f.company);sv('fAddress',f.address);sv('fPhone2',f.phone);sv('fEmail2',f.email);sv('fWaNum',f.waNum);sv('fWaMsg',f.waMsg);ck('contactEnabled',f.contactEnabled===true);
@@ -2429,7 +2459,7 @@ function shopClosedFromInputs(){const v=id=>document.getElementById(id)?.value||
 async function toggleShopClosed(v){const lbl=document.getElementById('shopClosedLabel');if(lbl)lbl.textContent=v?'Closed 已关闭':'Open 营业中';if(!await saveConfig({shopClosed:shopClosedFromInputs()},'shopClosedMsg',v?'🔒 Shop closed 店铺已关闭 (customers cannot order)':'✅ Shop open 店铺已开放')){document.getElementById('shopClosedToggle').checked=!v;}}
 async function scUploadImg(e){const f=e.target.files[0];e.target.value='';if(!f)return;try{showMsg('shopClosedMsg','success','⏳ Uploading…',true);const url=await uploadImageFile(f,'brand',1200);document.getElementById('scImgUrl').value=url;const p=document.getElementById('scImgPreview');p.src=IS(url);p.style.display='';showMsg('shopClosedMsg','success','✅ Uploaded — press 💾 Save');}catch(err){showMsg('shopClosedMsg','error','❌ '+err.message,true);}}
 function saveShopClosed(){saveConfig({shopClosed:shopClosedFromInputs()},'shopClosedMsg');}
-function loadShopClosedInputs(){const sc=S.shopClosed||{};const tog=document.getElementById('shopClosedToggle');if(tog)tog.checked=sc.enabled||false;const lbl=document.getElementById('shopClosedLabel');if(lbl)lbl.textContent=sc.enabled?'Closed 已关闭':'Open 营业中';const sv=(id,v)=>{const el=document.getElementById(id);if(el)el.value=v||'';};sv('scTitleEn',sc.titleEn);sv('scTitleCn',sc.titleCn);sv('scMsgEn',sc.msgEn);sv('scMsgCn',sc.msgCn);sv('scImgUrl',sc.img);const prev=document.getElementById('scImgPreview');if(prev&&sc.img){prev.src=IS(sc.img);prev.style.display='';}else if(prev)prev.style.display='none';}
+function loadShopClosedInputs(){cfgSnap('shopClosed');_cfgRender.shopClosed=loadShopClosedInputs;const sc=S.shopClosed||{};const tog=document.getElementById('shopClosedToggle');if(tog)tog.checked=sc.enabled||false;const lbl=document.getElementById('shopClosedLabel');if(lbl)lbl.textContent=sc.enabled?'Closed 已关闭':'Open 营业中';const sv=(id,v)=>{const el=document.getElementById(id);if(el)el.value=v||'';};sv('scTitleEn',sc.titleEn);sv('scTitleCn',sc.titleCn);sv('scMsgEn',sc.msgEn);sv('scMsgCn',sc.msgCn);sv('scImgUrl',sc.img);const prev=document.getElementById('scImgPreview');if(prev&&sc.img){prev.src=IS(sc.img);prev.style.display='';}else if(prev)prev.style.display='none';}
 // ── Settings: password, order numbers, reset ──
 async function changeAdminPwd(){
   const oldP=document.getElementById('oldPwd').value,newP=document.getElementById('newPwd').value;
@@ -2466,7 +2496,7 @@ async function resetAllOrders(){
 // ── Popup ──
 function popupFromInputs(){const v=id=>document.getElementById(id)?.value||'';return{enabled:document.getElementById('popupEnabled')?.checked||false,showOrder:document.getElementById('popupShowOrder')?.checked!==false,title:v('popupTitle'),titleCn:v('popupTitleCn'),msg:v('popupMsg'),msgCn:v('popupMsgCn'),btnText:v('popupBtn')||'Continue Shopping',btnTextCn:v('popupBtnCn')||'继续购物',img:v('popupImgUrl').trim()};}
 function savePopup(){saveConfig({popup:popupFromInputs()},'popupSaveMsg','✅ Popup saved 已保存');}
-function loadPopupAdminInputs(){const p=S.popup;const sv=(id,v)=>{const el=document.getElementById(id);if(el)el.value=v||'';};const cb=document.getElementById('popupEnabled');if(cb)cb.checked=p.enabled||false;const so=document.getElementById('popupShowOrder');if(so)so.checked=p.showOrder!==false;sv('popupTitle',p.title);sv('popupTitleCn',p.titleCn);sv('popupMsg',p.msg);sv('popupMsgCn',p.msgCn);sv('popupBtn',p.btnText);sv('popupBtnCn',p.btnTextCn);sv('popupImgUrl',p.img);updPopupPreview(p.img);}
+function loadPopupAdminInputs(){cfgSnap('popup');_cfgRender.popup=loadPopupAdminInputs;const p=S.popup;const sv=(id,v)=>{const el=document.getElementById(id);if(el)el.value=v||'';};const cb=document.getElementById('popupEnabled');if(cb)cb.checked=p.enabled||false;const so=document.getElementById('popupShowOrder');if(so)so.checked=p.showOrder!==false;sv('popupTitle',p.title);sv('popupTitleCn',p.titleCn);sv('popupMsg',p.msg);sv('popupMsgCn',p.msgCn);sv('popupBtn',p.btnText);sv('popupBtnCn',p.btnTextCn);sv('popupImgUrl',p.img);updPopupPreview(p.img);}
 function updPopupPreview(u){const wrap=document.getElementById('popupImgPreviewWrap');const prev=document.getElementById('popupImgPreview');if(u&&wrap&&prev){prev.src=IS(u);wrap.style.display='';}else if(wrap)wrap.style.display='none';}
 async function popupUploadImg(e){const f=e.target.files[0];e.target.value='';if(!f)return;try{showMsg('popupSaveMsg','success','⏳ Uploading…',true);const url=await uploadImageFile(f,'brand',1200);document.getElementById('popupImgUrl').value=url;updPopupPreview(url);savePopup();}catch(err){showMsg('popupSaveMsg','error','❌ '+err.message,true);}}
 function popupSetUrl(){updPopupPreview((document.getElementById('popupImgUrl')?.value||'').trim());savePopup();}
