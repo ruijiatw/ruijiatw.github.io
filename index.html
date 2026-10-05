@@ -8,7 +8,6 @@
 <meta property="og:url" content="https://ruijiatw.github.io/"/>
 <meta property="og:site_name" content="RUIJIA台湾代购"/>
 <title>RUIJIA台湾代购</title>
-<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 <script type="module">
 // ═══ Firebase layer — project twdg-ae34e ═══
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js";
@@ -974,6 +973,7 @@ function fbErrText(e){
   if(c.includes('unavailable')||c==='timeout')return '网络不稳定，连不上 Firebase — 请检查网络后重试';
   if(c.includes('resource-exhausted'))return 'Firebase 今日额度已用完 (quota exceeded) — 请升级 Blaze plan';
   if(c.includes('not-found'))return '资料不存在 (not found)';
+  if(c==='stale'||c==='product-gone')return e.message;
   return (e&&e.message)||String(e);
 }
 function toast(msg,ms=2200,bg='#2d6a4f'){const t=document.createElement('div');t.style.cssText=`position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:${bg};color:#fff;padding:9px 18px;border-radius:24px;font-size:.85rem;z-index:99999;box-shadow:0 2px 10px rgba(0,0,0,.2);max-width:92vw;text-align:center`;t.textContent=msg;document.body.appendChild(t);setTimeout(()=>t.remove(),ms);}
@@ -1011,11 +1011,27 @@ const R={
 };
 
 // ── Config writes (admin) — replaces only the given top-level fields ──
+// What each settings list looked like when this admin's form was drawn. Saving checks the server
+// still has exactly that, so one admin can never silently overwrite another admin's newer change
+// (e.g. a bank account number). If someone else changed it, the form reloads with the latest data.
+const _cfgBase={};
+const _cfgRender={};
+function cfgNorm(k,v){v=v===undefined?JSON.parse(JSON.stringify(DEFAULT_CONFIG[k]??null)):v;if(k==='faq'&&Array.isArray(v))v=v.map(f=>({...f,active:f.active==null?true:f.active}));return JSON.stringify(v);}
+function cfgSnap(k){_cfgBase[k]=cfgNorm(k,JSON.parse(JSON.stringify(S[k]??null)));}
 async function saveConfig(fields,msgId,okText){
-  return saveOp(async()=>{
-    const clean=JSON.parse(JSON.stringify(fields));
-    await FB.setDoc(R.config(),clean,{mergeFields:Object.keys(clean)});
+  const clean=JSON.parse(JSON.stringify(fields));
+  const guard=Object.keys(clean).filter(k=>_cfgBase[k]!==undefined);
+  const ok=await saveOp(async()=>{
+    if(!guard.length){await FB.setDoc(R.config(),clean,{mergeFields:Object.keys(clean)});return;}
+    await FB.runTransaction(FB.db,async tx=>{
+      const cs=await tx.get(R.config());const d=cs.exists()?cs.data():{};
+      for(const k of guard){if(cfgNorm(k,d[k])!==_cfgBase[k]){const e=new Error('其他管理员刚刚改过这个设置，已重新载入最新内容，请再改一次。Another admin just changed this — reloaded the latest version, please make your change again.');e.code='stale';throw e;}}
+      tx.set(R.config(),clean,{mergeFields:Object.keys(clean)});
+    });
   },msgId,okText);
+  if(ok)guard.forEach(k=>{_cfgBase[k]=cfgNorm(k,clean[k]);});
+  else if(guard.length){setTimeout(()=>guard.forEach(k=>{try{_cfgRender[k]&&_cfgRender[k]();}catch(e){}}),2500);}
+  return ok;
 }
 
 // ── Products: catalog doc (text) + stock doc. Stock merged into S.products for display ──
@@ -1041,24 +1057,48 @@ function mergeStockEntry(srv,p){
   const ops=p.stockOps;if(!ops)return stockEntryFor(p);
   srv=srv||{p:-1,v:{}};const sv=srv.v||{};
   const e={p:ops.p&&ops.p.set!==undefined?ops.p.set:(srv.p!=null?srv.p:-1),v:{}};
-  (p.variants||[]).forEach(x=>{const op=ops.v[x.name]||{};e.v[x.name]=op.set!==undefined?op.set:(op.keepFrom!=null&&sv[op.keepFrom]!=null?sv[op.keepFrom]:-1);});
+  (p.variants||[]).forEach(x=>{const op=ops.v[x.name]||{};
+    e.v[x.name]=op.set!==undefined?op.set
+      :(op.keepFrom!=null&&sv[op.keepFrom]!=null)?sv[op.keepFrom]
+      :sv[x.name]!=null?sv[x.name]:-1;});   // variant this admin didn't touch (e.g. added/renamed by another admin) keeps its live stock
   return e;
 }
-// Read-modify-write the catalog inside a transaction so two admins never overwrite each other.
-// keepStock: image/visibility-only saves never touch stock at all.
-async function txSaveProduct(p,{remove=false,keepStock=false}={}){
+function prodErr(msg){const e=new Error(msg);e.code='product-gone';return e;}
+// Read-modify-write the catalog inside a transaction, applied to the LATEST server copy of the product,
+// so several admins editing at once never undo each other's changes.
+//   mode 'add'    → new product
+//   fields [...]  → only these fields are copied from p (the ones this admin changed)
+//   mutateImages  → change the server copy's image list (two admins uploading at once both keep their images)
+//   remove        → delete product
+//   keepStock     → never touch stock
+async function txSaveProduct(p,{remove=false,keepStock=false,mode='',fields=null,mutateImages=null}={}){
+  let saved=null;
   await FB.runTransaction(FB.db,async tx=>{
     const cs=await tx.get(R.catalog());const ss=await tx.get(R.stock());
     const list=cs.exists()?(cs.data().products||[]):[];
     const stock=ss.exists()?(ss.data().items||{}):{};
     const i=list.findIndex(x=>x.id===p.id);
     if(remove){if(i>-1)list.splice(i,1);delete stock[p.id];}
-    else{const c=productForCatalog(p);if(i>-1)list[i]=c;else list.push(c);
+    else{
+      if(mode!=='add'&&i<0)throw prodErr('此产品已被其他管理员删除，无法保存 This product was deleted by another admin.');
+      let c;
+      if(mode==='add'||i<0)c=productForCatalog(p);
+      else{
+        c=JSON.parse(JSON.stringify(list[i]));
+        if(mutateImages){c.images=c.images||[];mutateImages(c.images);if(c.images.length&&!c.images.some(x=>x.selected))c.images[0].selected=true;}
+        else if(fields){const pc=productForCatalog(p);fields.forEach(k=>{if(pc[k]===undefined)delete c[k];else c[k]=pc[k];});}
+        else c=productForCatalog(p);
+      }
+      if(i>-1)list[i]=c;else list.push(c);
+      saved=c;
       if(keepStock&&stock[p.id]){/* leave live stock exactly as it is */}
-      else stock[p.id]=mergeStockEntry(stock[p.id],p);}
+      else stock[p.id]=mode==='add'||!p.stockOps?mergeStockEntry(stock[p.id],p)
+        :mergeStockEntry(stock[p.id],{variants:c.variants||[],stockOps:p.stockOps});
+    }
     tx.set(R.catalog(),{products:list,updatedAt:FB.serverTimestamp()});
     tx.set(R.stock(),{items:stock,lastKey:'admin'});
   });
+  return saved;
 }
 
 // ── Live sync ──
@@ -1120,7 +1160,7 @@ function afterPublicData(what){
     const cp=document.getElementById('page-checkout');if(cp&&cp.classList.contains('active')){renderBankSection();renderCheckoutSummary();}}
   else{renderProducts();}
   if(isAdminView()){
-    if(what==='catalog'||what==='stock'){if(!document.querySelector('.prod-edit-panel.open'))renderProductList();}
+    if(what==='catalog'||what==='stock'){if(!document.querySelector('.prod-edit-panel.open'))renderProductList();else if(what==='stock'&&typeof epSyncStock==='function')epSyncStock();}
   }
 }
 function bootError(e){
@@ -1157,7 +1197,7 @@ function startAdminSync(){
     S.discounts=snap.docs.map(d=>({...d.data(),code:d.id}));refreshAdminViews('discounts');
   },e=>adminSyncError('discounts',e)));
   _adminUnsubs.push(FB.onSnapshot(R.counter(),snap=>{ADMIN.counter=snap.exists()?(+snap.data().value||0):0;const el=document.getElementById('counterNow');if(el)el.textContent=ADMIN.counter;const nx=document.getElementById('counterNext');if(nx)nx.textContent=fmtOrderId(ADMIN.counter+1);const sv=document.getElementById('setCounterVal');if(sv&&document.activeElement!==sv)sv.value=ADMIN.counter;},e=>adminSyncError('counter',e)));
-  FB.getDoc(R.github()).then(s=>{ADMIN.github=s.exists()?s.data():null;loadGithubInputs();}).catch(e=>console.warn('github cfg',e));
+  (async()=>{for(let a=1;a<=5;a++){try{const s=await withTimeout(FB.getDoc(R.github()),15000,'GitHub settings');ADMIN.github=s.exists()?s.data():null;loadGithubInputs();return;}catch(e){console.warn('github settings',e);await new Promise(r=>setTimeout(r,2000*a));}}})();
 }
 function stopAdminSync(){_adminUnsubs.forEach(u=>{try{u();}catch(e){}});_adminUnsubs=[];}
 function adminSyncError(what,e){console.error('admin sync '+what,e);const b=document.getElementById('adminSyncBanner');if(b){b.style.display='';b.textContent='⚠️ '+what+' 同步失败: '+fbErrText(e);}}
@@ -1603,7 +1643,7 @@ async function placeOrderWithRetry(d,onAttempt){
   //  • busy  — another customer took the next order number between our read and our commit.
   //            Real Firestore evaluates security rules before its own conflict check, so this
   //            arrives as "permission-denied" (counter must be exactly +1). Re-reading and
-  //            trying again with the fresh number is the correct fix. Keeps queueing for up to 90 s.
+  //            trying again with the fresh number is the correct fix. Keeps queueing for up to 150 s.
   //  • network — timeouts / unavailable. Up to 4 slower retries.
   let lastErr,busy=0,net=0;const t0=Date.now();
   while(true){
@@ -1612,7 +1652,7 @@ async function placeOrderWithRetry(d,onAttempt){
       lastErr=e;const c=e.code||'';console.warn('order attempt',{busy,net},c||e);
       if(c.startsWith('biz/')||c.includes('resource-exhausted')||c.includes('invalid-argument'))throw e;
       if(c.includes('permission-denied')||c.includes('aborted')||c.includes('failed-precondition')){
-        busy++;if(Date.now()-t0>90000)break;
+        busy++;if(Date.now()-t0>150000){lastErr=Object.assign(new Error('busy'),{code:'busy'});break;}
         await new Promise(r=>setTimeout(r,100+Math.random()*Math.min(2000,150*Math.pow(1.6,Math.min(busy,8)))));
       }else{
         if(++net>=4)break;
@@ -1654,13 +1694,14 @@ async function submitOrder(){
     console.error('submit failed',e);
     const c=e.code||'';
     if(c.startsWith('biz/')){
-      lsDel('twdg_pending');_orderKey=null;
+      // Nothing was ordered. Keep the same order key, so the receipt already uploaded is simply re-used (no duplicates, no orphan receipts).
       if(c==='biz/soldout'||c==='biz/unavailable')refreshStock(true);
-      if(c==='biz/price'){renderCheckoutSummary();_submitting=false;openConfirmModal();setSubmitStatus('warn',`⚠️ ${esc(e.message)}<br>价格已更新，订单未提交。请检查新的总额后再按确认。<br>Prices changed — order NOT placed. Please check the new total and confirm again.`);return;}
+      if(c==='biz/price'){_submitting=false;if(appliedDiscount)await applyDiscount(true);renderCheckoutSummary();openConfirmModal();setSubmitStatus('warn',`⚠️ ${esc(e.message)}<br>价格已更新，订单未提交。请检查新的总额后再按确认。<br>Prices changed — order NOT placed. Please check the new total and confirm again.`);return;}
       setSubmitStatus('error',c==='biz/closed'||c==='biz/pickup'?`❌ ${esc(e.message)}`:`❌ ${esc(e.message)}<br>订单未提交，请修改购物车。Order NOT placed — please update your cart.`);
       btn.textContent='Confirm & Submit ✅ 确认提交';
     }else{
-      setSubmitStatus('error',`❌ 订单没有提交成功 Order NOT placed.<br>${esc(fbErrText(e))}<br><b>按下面按钮重试，不会重复下单。</b> Retry is safe — it will not create a duplicate.`);
+      const why=e.code==='busy'?'现在下单的人非常多，系统排队太久。Too many orders right now.':fbErrText(e);
+      setSubmitStatus('error',`❌ 订单没有提交成功 Order NOT placed.<br>${esc(why)}<br><b>按下面按钮重试，不会重复下单。</b> Retry is safe — it will not create a duplicate.`);
       btn.disabled=false;btn.textContent='🔄 Retry 重试';
     }
     cancel.disabled=false;
@@ -1843,7 +1884,7 @@ async function uploadImageFile(file,folder='img',maxDim=1400){
   if(!res.ok){let t='';try{t=(await res.json()).message||'';}catch(e){}throw new Error(`GitHub upload failed (${res.status}) ${t}. 请检查 Settings 的 GitHub token 权限。`);}
   const url=ghBaseUrl(g)+'/'+path;PREVIEW[url]=data;return url;
 }
-async function uploadMany(files,folder,onEach){const urls=[];for(const f of files){urls.push(await uploadImageFile(f,folder));onEach&&onEach(urls.length,files.length);}return urls;}
+async function uploadMany(files,folder,onEach,errors){const urls=[];let n=0;for(const f of files){try{urls.push(await uploadImageFile(f,folder));}catch(e){if(!errors)throw e;errors.push((f.name||'image')+': '+e.message);}n++;onEach&&onEach(n,files.length);}return urls;}
 function loadGithubInputs(){const g=ADMIN.github||{};const sv=(id,v)=>{const el=document.getElementById(id);if(el)el.value=v||'';};sv('ghOwner',g.owner);sv('ghRepo',g.repo);sv('ghBranch',g.branch||'main');sv('ghBase',g.baseUrl);const t=document.getElementById('ghToken');if(t){t.value='';t.placeholder=g.token?'•••••••• (saved 已保存 — leave blank to keep)':'github_pat_…';}const st=document.getElementById('ghStatus');if(st)st.textContent=g.token?`✅ Configured: ${g.owner}/${g.repo} → ${ghBaseUrl(g)}`:'⚠️ Not configured — image uploads disabled (URL paste still works)';}
 async function saveGithub(){
   const v=id=>(document.getElementById(id)?.value||'').trim();
@@ -1869,17 +1910,20 @@ async function addProduct(){
   const img=document.getElementById('pImg').value.trim()||'📦';
   const ps=parseInt(document.getElementById('pStock')?.value);
   const p={id:newId(),nameEn:en||cn,nameCn:cn||en,descEn:document.getElementById('pDescEn').value,descCn:document.getElementById('pDescCn').value,basePrice:parseFloat(document.getElementById('pPrice').value)||0,img,images:isImg(img)?[{url:img,selected:true}]:[],variants:getVarRows(),active:true,stock:isNaN(ps)?-1:ps,oversell:false,preOrder:{enabled:false,shipDate:'',note:'',noteCn:''},createdAt:Date.now()};
-  if(await saveOp(()=>txSaveProduct(p),'productMsg','✅ Product added 已新增 — click ✏️ Edit to upload images')){
+  if(p.stock<-1||p.variants.some(v=>v.stock<-1)){showMsg('productMsg','error','Stock cannot be below -1 (-1 = unlimited). 库存不能小于 -1。');return;}
+  if(await saveOp(()=>txSaveProduct(p,{mode:'add'}),'productMsg','✅ Product added 已新增 — click ✏️ Edit to upload images')){
     ['pNameEn','pNameCn','pDescEn','pDescCn','pPrice','pImg','pStock'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
     document.getElementById('variantRows').innerHTML='';addVarRow();
   }
 }
 function epThumbs(p){const imgs=p.images||[];return imgs.map((img,ii)=>`<div style="position:relative;display:inline-block;margin-right:4px" title="Click to set as primary 点击设为主图"><img src="${esc(IS(img.url))}" onclick="epSetPrimary('${p.id}',${ii})" style="width:52px;height:52px;object-fit:cover;border-radius:5px;border:2px solid ${img.selected?'var(--pri)':'var(--border)'};cursor:pointer;background:#f0f0f0" onerror="this.style.opacity=.35;this.title='Publishing… 发布中 (~1 min)'"/><button onclick="epRemoveImg('${p.id}',${ii})" style="position:absolute;top:-5px;right:-5px;width:16px;height:16px;background:var(--pri);color:#fff;border:none;border-radius:50%;cursor:pointer;font-size:.65rem;display:flex;align-items:center;justify-content:center">✕</button>${img.selected?'<span style="position:absolute;bottom:-2px;left:0;right:0;text-align:center;font-size:.5rem;background:var(--pri);color:#fff;border-radius:0 0 4px 4px">★</span>':''}</div>`).join('')||'<span class="hint">No images yet 暂无图片</span>';}
+const _epBase={};   // product as shown in its edit form (what the admin started from)
 function renderProductList(keepOpen){
   const el=document.getElementById('productList');if(!el)return;
   const openIds=keepOpen?[keepOpen]:Array.from(document.querySelectorAll('.prod-edit-panel.open')).map(x=>x.id.replace('edit-',''));
   if(!S.products.length){el.innerHTML=`<div class="empty">No products yet. 暂无产品。</div>`;return;}
   el.innerHTML=S.products.map(p=>{
+    _epBase[p.id]=JSON.parse(JSON.stringify(p));
     const imgs=p.images||[];const main=getProdMainImg(p);
     const stockTxt=p.stock===-1||p.stock==null?'Stock: ∞':p.stock===0?`<span style="color:var(--pri)">Out of stock${p.oversell?' (selling on)':''}</span>`:`Stock: ${p.stock}`;
     return`<div class="pli" style="flex-direction:column;align-items:flex-start;gap:6px">
@@ -1932,8 +1976,9 @@ function renderProductList(keepOpen){
 function toggleEditPanel(id){document.getElementById('edit-'+id)?.classList.toggle('open');}
 function addEditVarRow(pid){const tb=document.getElementById('ep-vars-'+pid);const vi='n'+Date.now();const tr=document.createElement('tr');tr.innerHTML=`<td><input type="text" id="epvn-${pid}-${vi}" placeholder="Variant name"/></td><td><input type="number" id="epvp-${pid}-${vi}" step="0.01" min="0" placeholder="29.90"/></td><td><input type="number" id="epvw-${pid}-${vi}" min="0" placeholder="200"/></td><td><input type="number" id="epvs-${pid}-${vi}" step="0.5" min="0" placeholder="blank=auto"/></td><td><input type="number" id="epvst-${pid}-${vi}" min="-1" value="-1" style="width:60px"/></td><td><input type="checkbox" id="epva-${pid}-${vi}" checked/></td><td><button class="del-btn" onclick="this.closest('tr').remove()">✕</button></td>`;tb.appendChild(tr);}
 async function saveProductEdit(id){
-  const cur=S.products.find(x=>x.id===id);if(!cur)return;
-  const p=JSON.parse(JSON.stringify(cur));const g=k=>document.getElementById(k);
+  const cur=S.products.find(x=>x.id===id);if(!cur){showMsg('ep-msg-'+id,'error','❌ 此产品已被删除 This product was deleted.',true);return;}
+  const base=_epBase[id]||cur;
+  const p=JSON.parse(JSON.stringify(base));const g=k=>document.getElementById(k);
   p.nameEn=g('ep-nameEn-'+id).value.trim()||p.nameEn;p.nameCn=g('ep-nameCn-'+id).value.trim()||p.nameCn;
   p.descEn=g('ep-descEn-'+id).value;p.descCn=g('ep-descCn-'+id).value;
   const bp=parseFloat(g('ep-price-'+id).value);p.basePrice=isNaN(bp)?p.basePrice:bp;
@@ -1946,30 +1991,45 @@ async function saveProductEdit(id){
   p.variants=Array.from(rows).map(tr=>{const ins=tr.querySelectorAll('input');const n=ins[0].value.trim();if(!n)return null;const st=parseInt(ins[4].value);const stock=isNaN(st)?-1:st;
     const orig=ins[4].dataset.orig,oname=ins[4].dataset.oname;
     p.stockOps.v[n]=(orig!==undefined&&String(stock)===orig)?{keepFrom:oname}:{set:stock};
-    const old=(cur.variants||[]).find(v=>v.name===(oname||n))||{};return{...old,name:n,price:parseFloat(ins[1].value)||0,weight:parseInt(ins[2].value)||0,shipOverride:ins[3].value!==''?parseFloat(ins[3].value):null,stock,active:ins[5].checked};}).filter(Boolean);
+    const old=(base.variants||[]).find(v=>v.name===(oname||n))||{};return{...old,name:n,price:parseFloat(ins[1].value)||0,weight:parseInt(ins[2].value)||0,shipOverride:ins[3].value!==''?parseFloat(ins[3].value):null,stock,active:ins[5].checked};}).filter(Boolean);
   const names=p.variants.map(v=>v.name);if(new Set(names).size!==names.length){showMsg('ep-msg-'+id,'error','Variant names must be unique. 规格名称不能重复。');return;}
-  if(await saveOp(()=>txSaveProduct(p),'ep-msg-'+id,'✅ Saved to Firebase 已保存'))setTimeout(()=>{renderProductList(id);showMsg('ep-msg-'+id,'success','✅ Saved to Firebase 已保存');},400);
+  if(p.stock<-1||p.variants.some(v=>v.stock<-1)){showMsg('ep-msg-'+id,'error','Stock cannot be below -1 (-1 = unlimited). 库存不能小于 -1。',true);return;}
+  // Only the fields this admin changed are written; everything else keeps the latest server value.
+  const noStock=vs=>JSON.stringify((vs||[]).map(v=>{const c={...v};delete c.stock;return c;}));
+  const fields=['nameEn','nameCn','descEn','descCn','basePrice','img','active','oversell','preOrder'].filter(k=>JSON.stringify(p[k])!==JSON.stringify(base[k]));
+  if(noStock(p.variants)!==noStock(base.variants))fields.push('variants');
+  if(await saveOp(()=>txSaveProduct(p,{fields}),'ep-msg-'+id,'✅ Saved to Firebase 已保存'))setTimeout(()=>{renderProductList(id);showMsg('ep-msg-'+id,'success','✅ Saved to Firebase 已保存');},400);
 }
 // Image-only changes: read the latest product, change images, save — doesn't touch unsaved text in the form.
 async function saveProductImages(id,mutate,msgOk){
   const cur=S.products.find(x=>x.id===id);if(!cur)return false;
-  const p=JSON.parse(JSON.stringify(cur));p.images=p.images||[];mutate(p.images);
-  if(p.images.length&&!p.images.some(i=>i.selected))p.images[0].selected=true;
-  const ok=await saveOp(()=>txSaveProduct(p,{keepStock:true}),'ep-imgmsg-'+id,msgOk||'✅ Images saved 图片已保存');
-  if(ok){cur.images=p.images;const box=document.getElementById('ep-imgs-'+id);if(box)box.innerHTML=epThumbs(cur);}
+  let saved=null;
+  const ok=await saveOp(async()=>{saved=await txSaveProduct({id},{keepStock:true,mutateImages:mutate});},'ep-imgmsg-'+id,msgOk||'✅ Images saved 图片已保存');
+  if(ok&&saved){cur.images=saved.images;if(_epBase[id])_epBase[id].images=saved.images;const box=document.getElementById('ep-imgs-'+id);if(box)box.innerHTML=epThumbs(cur);}
   return ok;
+}
+// Show live stock in open edit forms (only for numbers the admin hasn't typed over).
+function epSyncStock(){
+  document.querySelectorAll('.prod-edit-panel.open').forEach(panel=>{
+    const id=panel.id.replace('edit-','');const st=S.stock[id];if(!st)return;
+    const ps=document.getElementById('ep-stock-'+id);
+    if(ps&&ps.value===ps.dataset.orig&&st.p!=null){ps.value=st.p;ps.dataset.orig=String(st.p);}
+    panel.querySelectorAll('input[data-oname]').forEach(inp=>{const v=(st.v||{})[inp.dataset.oname];if(v!=null&&inp.value===inp.dataset.orig){inp.value=v;inp.dataset.orig=String(v);}});
+  });
 }
 async function epUploadImgs(pid,e){
   const files=Array.from(e.target.files);e.target.value='';if(!files.length)return;
+  const errs=[];
   try{
     showMsg('ep-imgmsg-'+pid,'success',`⏳ Uploading 0/${files.length}…`,true);
-    const urls=await uploadMany(files,'img',(n,t)=>showMsg('ep-imgmsg-'+pid,'success',`⏳ Uploading ${n}/${t}…`,true));
-    await saveProductImages(pid,imgs=>urls.forEach(u=>imgs.push({url:u,selected:false})),`✅ ${urls.length} image(s) uploaded & saved 已上传保存`);
+    const urls=await uploadMany(files,'img',(n,t)=>showMsg('ep-imgmsg-'+pid,'success',`⏳ Uploading ${n}/${t}…`,true),errs);
+    if(urls.length){const ok=await saveProductImages(pid,imgs=>urls.forEach(u=>imgs.push({url:u,selected:false})),`✅ ${urls.length} image(s) uploaded & saved 已上传保存`);if(!ok)return;}
+    if(errs.length)showMsg('ep-imgmsg-'+pid,'error',`❌ ${errs.length}/${files.length} 张上传失败（${urls.length} 张已保存）: `+errs.join(' | '),true);
   }catch(err){showMsg('ep-imgmsg-'+pid,'error','❌ '+err.message,true);}
 }
-async function epAddImgUrl(pid){const inp=document.getElementById('ep-imgurl-'+pid);const url=(inp?.value||'').trim();if(!isImg(url)){showMsg('ep-imgmsg-'+pid,'error','Paste a full https:// image URL');return;}if(await saveProductImages(pid,imgs=>imgs.push({url,selected:false})))inp.value='';}
-function epSetPrimary(pid,ii){saveProductImages(pid,imgs=>{const sel=imgs.splice(ii,1)[0];imgs.forEach(i=>i.selected=false);imgs.unshift({...sel,selected:true});});}
-function epRemoveImg(pid,ii){if(!confirm('Remove this image? 移除此图片？'))return;saveProductImages(pid,imgs=>{imgs.splice(ii,1);});}
+const epImgUrl=(pid,ii)=>((S.products.find(x=>x.id===pid)||{}).images||[])[ii]?.url;
+function epSetPrimary(pid,ii){const u=epImgUrl(pid,ii);saveProductImages(pid,imgs=>{const j=imgs.findIndex(x=>x.url===u);if(j<0)return;const sel=imgs.splice(j,1)[0];imgs.forEach(i=>i.selected=false);imgs.unshift({...sel,selected:true});});}
+function epRemoveImg(pid,ii){if(!confirm('Remove this image? 移除此图片？'))return;const u=epImgUrl(pid,ii);saveProductImages(pid,imgs=>{const j=imgs.findIndex(x=>x.url===u);if(j>-1)imgs.splice(j,1);});}
 async function delProd(id){const p=S.products.find(x=>x.id===id);if(!p||!confirm(`Delete "${p.nameEn}"? 删除此产品？`))return;await saveOp(()=>txSaveProduct(p,{remove:true}),null,'🗑 Product deleted 已删除');}
 
 // ═══════════════════════════════════════════════════════════════
@@ -1978,7 +2038,7 @@ async function delProd(id){const p=S.products.find(x=>x.id===id);if(!p||!confirm
 async function togglePickup(v){const lbl=document.getElementById('pickupEnabledLabel');if(lbl)lbl.textContent=v?'Enabled 已启用':'Disabled 已关闭';if(!await saveConfig({pickupEnabled:v},'shippingMsg',v?'✅ Store Pickup enabled 已启用':'✅ Store Pickup disabled 已关闭'))document.getElementById('pickupEnabledToggle').checked=!v;}
 let _shipDraft=null;
 function renderShippingForm(){
-  _shipDraft=JSON.parse(JSON.stringify(S.shipping||{}));
+  _shipDraft=JSON.parse(JSON.stringify(S.shipping||{}));cfgSnap('shipping');_cfgRender.shipping=renderShippingForm;
   const tog=document.getElementById('pickupEnabledToggle');if(tog)tog.checked=S.pickupEnabled!==false;
   const lbl=document.getElementById('pickupEnabledLabel');if(lbl)lbl.textContent=S.pickupEnabled!==false?'Enabled 已启用':'Disabled 已关闭';
   drawShipping();
@@ -1999,7 +2059,7 @@ function saveShipping(){readShippingInputs();saveConfig({shipping:_shipDraft},'s
 // ── Banks ──
 let _banksDraft=null;
 function renderBankAdmin(){
-  _banksDraft=JSON.parse(JSON.stringify(S.banks||[]));
+  _banksDraft=JSON.parse(JSON.stringify(S.banks||[]));cfgSnap('banks');_cfgRender.banks=renderBankAdmin;
   document.getElementById('bankAdminList').innerHTML=_banksDraft.map((b,i)=>`<div class="bank-admin-item"><div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><label class="toggle-sw"><input type="checkbox" ${b.active?'checked':''} onchange="toggleBank(${i},this.checked)"><span class="slider"></span></label><span style="font-weight:600">${esc(b.name||'Unnamed')}</span><span style="font-size:.74rem;color:${b.active?'#0f5132':'var(--muted)'}">${b.active?'● Visible':'○ Hidden'}</span></div><div class="fr"><div class="fg"><label>Bank Name</label><input type="text" id="bk-name-${i}" value="${esc(b.name)}"/></div><div class="fg"><label>Account Name</label><input type="text" id="bk-acc-${i}" value="${esc(b.accName)}"/></div></div><div class="fr"><div class="fg"><label>Account No.</label><input type="text" id="bk-no-${i}" value="${esc(b.accNo)}"/></div><div class="fg"><label>Extra Info</label><input type="text" id="bk-extra-${i}" value="${esc(b.extra)}"/></div></div><div class="fg"><label>QR Code</label><div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:4px;align-items:flex-start"><div><div class="upload-area" style="padding:7px;display:inline-block" onclick="document.getElementById('qrf-${i}').click()"><span style="font-size:.78rem">📁 Upload QR</span><input type="file" id="qrf-${i}" accept="image/*" onchange="uploadQR(${i},event)" style="display:none"/></div><input type="text" id="bk-qr-${i}" placeholder="or paste URL" value="${esc(b.qr||'')}" style="margin-top:4px;width:220px"/></div>${b.qr?`<div style="position:relative"><img src="${esc(IS(b.qr))}" class="bank-qr-admin" alt="QR"/><button class="img-remove-btn" onclick="document.getElementById('bk-qr-${i}').value='';saveBank(${i})">✕</button></div>`:''}</div></div><div style="display:flex;gap:8px;margin-top:8px"><button class="save-btn" onclick="saveBank(${i})">💾 Save</button><button class="del-btn" onclick="delBank(${i})">Delete</button></div><div class="msg" id="bankMsg-${i}"></div></div>`).join('')||'<div class="empty">No banks.</div>';
 }
 function readBank(i){const b=_banksDraft[i];const v=id=>document.getElementById(id)?.value??'';b.name=v('bk-name-'+i);b.accName=v('bk-acc-'+i);b.accNo=v('bk-no-'+i);b.extra=v('bk-extra-'+i);b.qr=v('bk-qr-'+i).trim();}
@@ -2219,11 +2279,19 @@ function renderDiscountList(){
 function toggleDisc(code,v){saveOp(()=>FB.updateDoc(R.discount(code),{active:v}),null,v?'✅ Code ON':'✅ Code OFF');}
 function delDisc(code){if(confirm(`Delete code ${code}? 删除？`))saveOp(()=>FB.deleteDoc(R.discount(code)),null,'🗑 Deleted');}
 
+// Excel library (~1 MB) is only downloaded when an admin exports — customers never load it.
+const EXCELJS_URL='https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js';
+let _excelP=null;
+function loadExcelJS(){
+  if(typeof ExcelJS!=='undefined')return Promise.resolve();
+  if(!_excelP)_excelP=new Promise((res,rej)=>{const sc=document.createElement('script');sc.src=EXCELJS_URL;sc.onload=()=>res();sc.onerror=()=>{_excelP=null;sc.remove();rej(new Error('load'));};document.head.appendChild(sc);});
+  return _excelP;
+}
 // ── Excel export (orders currently shown by the filters, receipts fetched from Firebase) ──
 async function exportExcel(ev){
   const orders=filteredOrders();
   if(!orders.length){alert('No orders to export.');return;}
-  if(typeof ExcelJS==='undefined'){alert('Export library not loaded yet. Please wait and try again.');return;}
+  try{await loadExcelJS();}catch(e){alert('Excel 工具下载失败，请检查网络后再试。Could not load the Excel library — check your connection and try again.');return;}
   const btn=ev&&ev.target;const restore=()=>{if(btn){btn.textContent='⬇ Excel';btn.disabled=false;}};
   if(btn){btn.disabled=true;btn.textContent='⏳ 0/'+orders.length;}
   const withReceipts=confirm(`Export ${orders.length} orders.\nInclude receipt images? (uses ${orders.length} Firebase reads)\n包含收据图片吗？\n\nOK = Yes 包含   Cancel = No 不包含`);
@@ -2231,10 +2299,12 @@ async function exportExcel(ev){
     const receipts={};
     const failed=[];
     if(withReceipts){let n=0;for(let i=0;i<orders.length;i+=10){await Promise.all(orders.slice(i,i+10).map(async o=>{
+      const had=_receiptCache[o._key]!==undefined;
       let src='';for(let a=1;a<=2&&!src;a++){try{src=await getReceipt(o._key);}catch(e){delete _receiptCache[o._key];}}
       if(!src&&o.hasReceipt!==false)failed.push(o.id);
       // Smaller copy for Excel (≈100 KB) so 300+ orders still make a file Excel can open. Full size stays in Firebase.
       if(src){try{src=await compressDataURL(src,800,140000);}catch(e){}}
+      if(!had)delete _receiptCache[o._key];   // don't keep hundreds of full-size receipts in memory
       receipts[o._key]=src;n++;if(btn)btn.textContent=`⏳ ${n}/${orders.length}`;}));}}
     const wb=new ExcelJS.Workbook();const ws=wb.addWorksheet('Orders');
     ws.columns=[{header:'Order No.',key:'id',width:14},{header:'Date',key:'date',width:22},{header:'Status',key:'status',width:14},{header:'Delivery',key:'delivery',width:10},{header:'Tracking',key:'tracking',width:18},{header:'Customer',key:'customer',width:20},{header:'Phone',key:'phone',width:14},{header:'Email',key:'email',width:26},{header:'Postcode',key:'postcode',width:10},{header:'Address',key:'addr',width:30},{header:'Region',key:'region',width:18},{header:'Remarks',key:'remarks',width:20},{header:'Product',key:'product',width:26},{header:'Variant',key:'variant',width:14},{header:'Unit Price (RM)',key:'unitprice',width:14},{header:'Qty',key:'qty',width:6},{header:'Item Total (RM)',key:'itemtotal',width:14},{header:'Subtotal (RM)',key:'subtotal',width:13},{header:'Shipping (RM)',key:'shipping',width:13},{header:'Discount (RM)',key:'discount',width:13},{header:'Order Total (RM)',key:'total',width:15},{header:'Bank',key:'bank',width:14},{header:'Bank Holder Name',key:'bankHolder',width:22},{header:'Bank Ref No.',key:'ref',width:16},{header:'Label',key:'label',width:12},{header:'Receipt',key:'receipt',width:40}];
@@ -2246,7 +2316,7 @@ async function exportExcel(ev){
     await Promise.all(Object.entries(receipts).map(([k,src])=>src?new Promise(r=>{const im=new Image();im.onload=()=>{dims[k]=[im.naturalWidth,im.naturalHeight];r();};im.onerror=()=>r();im.src=src;}):null));
     const fit=k=>{const [w,h]=dims[k]||[4,3];const s=Math.min(270/w,200/h);return {width:Math.round(w*s),height:Math.round(h*s)};};
     [...orders].sort((a,b)=>a.no-b.no).forEach(o=>{o.items.forEach((it,idx)=>{
-      const row=ws.addRow({id:o.id,date:o.date,status:slabel(o.status),delivery:o.deliveryMode==='pickup'?'Pickup':'Delivery',tracking:o.tracking||'',customer:o.name,phone:o.phone,email:o.email,postcode:o.postcode||'',addr:o.addr,region:o.region||'',remarks:o.remarks||'',product:it.nameEn||'',variant:it.variation||'',unitprice:+money(it.price),qty:it.qty,itemtotal:+money(it.price*it.qty),subtotal:idx===0?+money(o.subtotal):'',shipping:idx===0?+money(o.shipping):'',discount:idx===0?+money(o.discount):'',total:idx===0?+money(o.total):'',bank:o.custBank||'',bankHolder:o.custBankHolder||'',ref:o.ref||'',label:o.label||'',receipt:''});
+      const ct=tsToDate(o.createdAt);const row=ws.addRow({id:o.id,date:ct?ct.toLocaleString('en-GB',{timeZone:'Asia/Kuala_Lumpur'}):o.date,status:slabel(o.status),delivery:o.deliveryMode==='pickup'?'Pickup':'Delivery',tracking:o.tracking||'',customer:o.name,phone:o.phone,email:o.email,postcode:o.postcode||'',addr:o.addr,region:o.region||'',remarks:o.remarks||'',product:it.nameEn||'',variant:it.variation||'',unitprice:+money(it.price),qty:it.qty,itemtotal:+money(it.price*it.qty),subtotal:idx===0?+money(o.subtotal):'',shipping:idx===0?+money(o.shipping):'',discount:idx===0?+money(o.discount):'',total:idx===0?+money(o.total):'',bank:o.custBank||'',bankHolder:o.custBankHolder||'',ref:o.ref||'',label:o.label||'',receipt:''});
       row.alignment={vertical:'middle',wrapText:true};
       const rc=receipts[o._key];
       if(idx===0&&rc){const m=rc.match(/^data:image\/(png|jpeg|jpg);base64,(.+)$/i);if(m){row.height=160;const id=wb.addImage({base64:m[2],extension:m[1].toLowerCase()==='png'?'png':'jpeg'});ws.addImage(id,{tl:{col:recCol+0.05,row:row.number-1+0.05},ext:fit(o._key),editAs:'oneCell'});}}
@@ -2274,7 +2344,7 @@ async function uploadFavicon(e){const f=e.target.files[0];e.target.value='';if(!
 function clearFavicon(){document.getElementById('bFavicon').value='';saveBranding();const fl=document.getElementById('faviconLink');if(fl)fl.remove();}
 // Slides
 let _slidesDraft=null;
-function renderSlideEditorList(){_slidesDraft=JSON.parse(JSON.stringify(S.slides||[]));drawSlides();}
+function renderSlideEditorList(){_slidesDraft=JSON.parse(JSON.stringify(S.slides||[]));cfgSnap('slides');_cfgRender.slides=renderSlideEditorList;drawSlides();}
 function drawSlides(){document.getElementById('slideEditorList').innerHTML=_slidesDraft.map((sl,i)=>`<div style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:10px"><div style="display:flex;justify-content:space-between;margin-bottom:8px"><b style="font-size:.88rem">Slide ${i+1}</b><button class="del-btn" onclick="removeSlide(${i})">Remove</button></div><div class="fg"><label>Background Image URL</label><input type="text" id="sl-img-${i}" value="${esc(sl.img)}" placeholder="https://..."/></div><div class="fg"><div class="upload-area" style="padding:8px" onclick="document.getElementById('slf-${i}').click()"><span style="font-size:.8rem">📁 Upload image 上传图片</span><input type="file" id="slf-${i}" accept="image/*" onchange="uploadSlideImg(${i},event)" style="display:none"/></div>${sl.img?`<div class="img-upload-wrap"><img src="${esc(IS(sl.img))}" style="max-height:70px;border-radius:5px;margin-top:5px"/><button class="img-remove-btn" onclick="removeSlideImg(${i})">✕</button></div>`:''}</div><div class="fr"><div class="fg"><label>Overlay Color</label><input type="color" id="sl-oc-${i}" value="${esc(sl.overlayColor||'#000000')}" style="height:34px;padding:2px"/></div><div class="fg"><label>Overlay Opacity (0–1)</label><input type="number" id="sl-op-${i}" value="${sl.overlayOpacity!=null?sl.overlayOpacity:.35}" min="0" max="1" step=".05"/></div></div><div class="fr"><div class="fg"><label>Title (EN)</label><input type="text" id="sl-ten-${i}" value="${esc(sl.titleEn)}"/></div><div class="fg"><label>Title (中)</label><input type="text" id="sl-tcn-${i}" value="${esc(sl.titleCn)}"/></div></div><div class="fr"><div class="fg"><label>Subtitle (EN)</label><input type="text" id="sl-sen-${i}" value="${esc(sl.subEn)}"/></div><div class="fg"><label>Subtitle (中)</label><input type="text" id="sl-scn-${i}" value="${esc(sl.subCn)}"/></div></div></div>`).join('')||'<div class="empty">No slides.</div>';}
 function readSlides(){_slidesDraft.forEach((sl,i)=>{const v=id=>document.getElementById(id)?.value;if(v('sl-img-'+i)!=null)sl.img=v('sl-img-'+i).trim();sl.overlayColor=v('sl-oc-'+i)||'#000000';const op=parseFloat(v('sl-op-'+i));sl.overlayOpacity=isNaN(op)?.35:op;sl.titleEn=v('sl-ten-'+i)||'';sl.titleCn=v('sl-tcn-'+i)||'';sl.subEn=v('sl-sen-'+i)||'';sl.subCn=v('sl-scn-'+i)||'';});}
 function addSlideEditor(){readSlides();if(_slidesDraft.length>=5){alert('Max 5 slides.');return;}_slidesDraft.push({img:'',overlayColor:'#000000',overlayOpacity:.35,titleEn:'New Slide',titleCn:'新幻灯片',subEn:'',subCn:''});drawSlides();}
@@ -2286,7 +2356,7 @@ function saveSlides(){readSlides();saveConfig({slides:_slidesDraft},'slidesMsg',
 function saveFooterContact(){const v=id=>document.getElementById(id)?.value||'';saveConfig({footer:{...S.footer,company:v('fCompany'),address:v('fAddress'),phone:v('fPhone2'),email:v('fEmail2'),waNum:digits(v('fWaNum')),waMsg:v('fWaMsg'),contactEnabled:document.getElementById('contactEnabled')?.checked===true}},'contactMsg');}
 function saveStorePickup(){const v=id=>document.getElementById(id)?.value||'';saveConfig({store:{addr:v('storeAddr'),hours:v('storeHours'),phone:v('storePhone'),map:v('storeMap')}},'storeMsg');}
 let _faqDraft=null;
-function renderFaqAdmin(){_faqDraft=JSON.parse(JSON.stringify(S.faq||[]));drawFaq();const t=document.getElementById('showFaqToggle');if(t)t.checked=S.footer.showFaq===true;const t2=document.getElementById('showTcToggle');if(t2)t2.checked=S.footer.showTc===true;}
+function renderFaqAdmin(){_faqDraft=JSON.parse(JSON.stringify(S.faq||[]));cfgSnap('faq');_cfgRender.faq=renderFaqAdmin;drawFaq();const t=document.getElementById('showFaqToggle');if(t)t.checked=S.footer.showFaq===true;const t2=document.getElementById('showTcToggle');if(t2)t2.checked=S.footer.showTc===true;}
 function drawFaq(){document.getElementById('faqList').innerHTML=_faqDraft.map((f,i)=>`<div style="display:flex;gap:8px;margin-bottom:8px;align-items:flex-start;background:${f.active!==false?'#f8f9fa':'#f0f0f0'};padding:8px;border-radius:7px;border-left:3px solid ${f.active!==false?'var(--sec)':'#adb5bd'}"><div style="flex:1;display:flex;flex-direction:column;gap:5px"><input type="text" value="${esc(f.q)}" id="faq-q-${i}" placeholder="Question 问题"/><textarea id="faq-a-${i}" rows="2" placeholder="Answer 答案">${esc(f.a)}</textarea></div><div style="display:flex;flex-direction:column;align-items:center;gap:6px;flex-shrink:0"><label class="toggle-sw"><input type="checkbox" id="faq-active-${i}" ${f.active!==false?'checked':''}><span class="slider"></span></label><button class="del-btn" onclick="rmFaq(${i})">✕</button></div></div>`).join('');}
 function readFaq(){_faqDraft=_faqDraft.map((_,i)=>({q:document.getElementById('faq-q-'+i)?.value||'',a:document.getElementById('faq-a-'+i)?.value||'',active:document.getElementById('faq-active-'+i)?.checked!==false}));}
 function addFaqRow(){readFaq();_faqDraft.push({q:'',a:'',active:true});drawFaq();}
@@ -2361,7 +2431,10 @@ function clearPopupImg(){document.getElementById('popupImgUrl').value='';updPopu
 function previewPopupFromInputs(){const saved=S.popup;S.popup=popupFromInputs();showCheckoutPopup(true);S.popup=saved;}
 
 // ═══ Start ═══
+(function(){const el=document.getElementById('fb-loading');if(el)el.style.display='flex';})();
 if(window.FB)boot();else window.addEventListener('fb-ready',boot,{once:true});
+// If the Firebase library itself can't be downloaded, don't leave a blank page — explain and offer reload.
+setTimeout(()=>{if(!window.FB){const el=document.getElementById('fb-loading');if(el){el.style.display='flex';el.innerHTML='<div style="text-align:center;padding:20px;max-width:420px"><div style="font-size:2rem">⚠️</div><div style="font-weight:700;margin:8px 0">无法连接服务器 Unable to load</div><div style="font-size:.85rem;color:#555;margin-bottom:14px">网络不稳定，请检查网络后重新载入。Please check your connection and reload.</div><button onclick="location.reload()" style="background:#457b9d;color:#fff;border:none;padding:10px 22px;border-radius:8px;font-weight:700;cursor:pointer">🔄 重新载入 Reload</button></div>';}}},20000);
 
 </script>
 </body>
