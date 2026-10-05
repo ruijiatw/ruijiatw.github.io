@@ -2098,19 +2098,35 @@ function adminViewOrder(key){
     <div class="msg" id="eo-msg"></div>
     <div style="display:flex;gap:8px;margin-top:12px"><button class="save-btn" style="flex:1" onclick="adminSaveOrder('${key}')">💾 Save Changes</button><button class="fbtn clear" onclick="closeOrderModal()">Cancel</button></div>`;
   document.getElementById('adminOrderModal').classList.add('show');
+  const b0=eoCollect(o);_eoBase={key,f:b0.f||null};
   loadReceiptInto(key,'eo-receipt',true);
   if(o.isNew)FB.updateDoc(R.order(key),{isNew:false}).catch(()=>{});
 }
 function eoRemoveItem(ii){const el=document.getElementById('eo-item-'+ii);if(el){el.style.opacity='.3';el.dataset.removed='1';}}
 function eoAddItem(){const wrap=document.getElementById('eo-items-wrap');const ii='new'+Date.now();const div=document.createElement('div');div.id='eo-item-'+ii;div.style.cssText='display:flex;gap:5px;margin-bottom:6px;align-items:center;flex-wrap:wrap';div.innerHTML=`<input type="text" id="eo-iname-${ii}" placeholder="Product name" style="flex:2;min-width:120px"/><input type="text" id="eo-ivar-${ii}" placeholder="Variant" style="flex:1;min-width:80px"/><input type="number" id="eo-iprice-${ii}" placeholder="Price" step="0.01" min="0" style="width:80px"/><input type="number" id="eo-iqty-${ii}" min="1" value="1" style="width:60px"/><button class="del-btn" onclick="eoRemoveItem('${ii}')">✕</button>`;wrap.appendChild(div);}
-async function adminSaveOrder(key){
-  const o=S.orders.find(x=>x._key===key);if(!o)return;const v=id=>document.getElementById(id)?.value??'';
+// What the edit form currently shows, as order fields (no timestamps).
+function eoCollect(o){
+  const v=id=>document.getElementById(id)?.value??'';
   const items=[];document.querySelectorAll('#eo-items-wrap [id^="eo-item-"]').forEach(div=>{if(div.dataset.removed)return;const ii=div.id.replace('eo-item-','');const name=v('eo-iname-'+ii).trim();if(!name)return;const old=o.items[parseInt(ii)]||{};items.push({...old,id:div.dataset.pid||old.id||'',nameEn:name,nameCn:div.dataset.cn||old.nameCn||name,variation:v('eo-ivar-'+ii).trim(),price:parseFloat(v('eo-iprice-'+ii))||0,qty:parseInt(v('eo-iqty-'+ii))||1});});
-  if(!items.length){showMsg('eo-msg','error','Order must have at least 1 item.');return;}
+  if(!items.length)return{error:'Order must have at least 1 item.'};
   const shipping=parseFloat(v('eo-ship'));const sub=Math.round(items.reduce((a,i)=>a+i.price*i.qty,0)*100)/100;const ship=isNaN(shipping)?o.shipping:shipping;
-  const f={status:v('eo-status'),label:v('eo-label').trim(),tracking:v('eo-tracking').trim(),name:v('eo-name').trim()||o.name,phone:v('eo-phone').trim()||o.phone,email:v('eo-email').trim()||o.email,deliveryMode:v('eo-mode'),region:v('eo-region'),postcode:v('eo-postcode').trim(),addr:v('eo-addr').trim()||o.addr,shipping:ship,custBank:v('eo-bank').trim(),custBankHolder:v('eo-bankholder').trim(),ref:v('eo-ref').trim(),remarks:v('eo-remarks'),items,subtotal:sub,total:Math.round(Math.max(0,sub+ship-(o.discount||0))*100)/100,isNew:false,updatedAt:FB.serverTimestamp()};
+  const f={status:v('eo-status'),label:v('eo-label').trim(),tracking:v('eo-tracking').trim(),name:v('eo-name').trim()||o.name,phone:v('eo-phone').trim()||o.phone,email:v('eo-email').trim()||o.email,deliveryMode:v('eo-mode'),region:v('eo-region'),postcode:v('eo-postcode').trim(),addr:v('eo-addr').trim()||o.addr,shipping:ship,custBank:v('eo-bank').trim(),custBankHolder:v('eo-bankholder').trim(),ref:v('eo-ref').trim(),remarks:v('eo-remarks'),items,subtotal:sub,total:Math.round(Math.max(0,sub+ship-(o.discount||0))*100)/100};
   f.accountEmail=normEmail(f.email);
-  if(await saveOp(()=>FB.updateDoc(R.order(key),f),'eo-msg','✅ Order saved to Firebase 已保存'))setTimeout(closeOrderModal,900);
+  return{f};
+}
+let _eoBase=null;
+// Saves ONLY the fields this admin changed since opening the form,
+// so a teammate's change to other fields (status, tracking…) made meanwhile is never overwritten.
+async function adminSaveOrder(key){
+  const o=S.orders.find(x=>x._key===key);if(!o)return;
+  const cur=eoCollect(o);if(cur.error){showMsg('eo-msg','error',cur.error);return;}
+  const base=(_eoBase&&_eoBase.key===key&&_eoBase.f)||{};const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
+  const f={};Object.keys(cur.f).forEach(k=>{if(!same(cur.f[k],base[k]))f[k]=cur.f[k];});
+  if(f.items||'shipping' in f){f.items=cur.f.items;f.shipping=cur.f.shipping;f.subtotal=cur.f.subtotal;f.total=cur.f.total;}
+  else{delete f.subtotal;delete f.total;}
+  if(!Object.keys(f).length){showMsg('eo-msg','success','No changes 没有改动');setTimeout(closeOrderModal,700);return;}
+  f.isNew=false;f.updatedAt=FB.serverTimestamp();
+  if(await saveOp(()=>FB.updateDoc(R.order(key),f),'eo-msg','✅ Order saved to Firebase 已保存')){_eoBase=null;setTimeout(closeOrderModal,900);}
 }
 
 // ── Customers (built from Firebase customer records + their orders) ──
