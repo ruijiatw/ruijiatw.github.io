@@ -166,7 +166,8 @@ main{flex:1}
 .ohist-card h4{font-size:.88rem;font-weight:700;margin-bottom:3px}
 .ohist-card p{font-size:.8rem;color:var(--muted);margin-bottom:2px}
 .spill{display:inline-block;padding:2px 8px;border-radius:20px;font-size:.72rem;font-weight:600}
-.s-pending{background:#fff3cd;color:#856404}.s-confirmed{background:#cff4fc;color:#055160}.s-shipped{background:#d1e7dd;color:#0f5132}.s-ready{background:#e8f5e9;color:#2e7d32}
+.s-pending{background:#fff3cd;color:#856404}.s-confirmed{background:#cff4fc;color:#055160}.s-shipped{background:#d1e7dd;color:#0f5132}.s-ready{background:#e8f5e9;color:#2e7d32}.s-cancelled{background:#f8d7da;color:#842029}.s-archived{background:#e2e3e5;color:#41464b}
+.order-card.cancelled{opacity:.75;border-left:4px solid #c1121f}
 .chat-wrap{display:flex;flex-direction:column;height:260px;border:1px solid var(--border);border-radius:8px;overflow:hidden}
 .chat-messages{flex:1;overflow-y:auto;padding:10px;display:flex;flex-direction:column;gap:7px;background:#f8f9fa}
 .chat-msg{max-width:75%;padding:7px 11px;border-radius:12px;font-size:.84rem;line-height:1.4}
@@ -531,6 +532,7 @@ html,body{overflow-x:hidden;max-width:100vw}
             <button class="status-pill" id="spill-confirmed" onclick="setStatusFilter('confirmed',this)">✅ Confirmed 已确认</button>
             <button class="status-pill" id="spill-shipped" onclick="setStatusFilter('shipped',this)">📦 Shipped 已发货</button>
             <button class="status-pill" id="spill-ready" onclick="setStatusFilter('ready',this)">🏪 Ready for Pickup 待取货</button>
+            <button class="status-pill" id="spill-cancelled" onclick="setStatusFilter('cancelled',this)" style="color:#c1121f;border-color:#c1121f">❌ Cancelled 已取消</button>
             <button class="status-pill" id="spill-archived" onclick="setStatusFilter('archived',this)" style="color:#6c757d;border-color:#6c757d">🗄 Archived 已归档</button>
           </div>
           <div class="search-summary" id="searchSummary"></div>
@@ -1752,7 +1754,7 @@ document.addEventListener('click',function(e){const ov=document.getElementById('
 //   This device remembers only the secret order/message keys.
 //   Any order can also be found with Order No. + phone number.
 // ═══════════════════════════════════════════════════════════════
-function slabel(s){return{pending:'Pending 待处理',confirmed:'Confirmed 已确认',shipped:'Shipped 已发货',ready:'Ready for Pickup 待取货',archived:'Archived 已归档'}[s]||s;}
+function slabel(s){return{pending:'Pending 待处理',confirmed:'Confirmed 已确认',shipped:'Shipped 已发货',ready:'Ready for Pickup 待取货',archived:'Archived 已归档',cancelled:'Cancelled 已取消'}[s]||s;}
 let _acOrders=[],_acMsgs=[];
 async function renderAccountPage(){
   const wrap=document.getElementById('accountWrap');
@@ -2081,7 +2083,7 @@ function filteredOrders(){
     if(fP&&!o.items.some(i=>((i.nameEn||'')+' '+(i.nameCn||'')+' '+(i.variation||'')).toLowerCase().includes(fP)))return false;
     if(fN&&!(o.name||'').toLowerCase().includes(fN))return false;if(fPh&&!(o.phone||'').toLowerCase().includes(fPh))return false;if(fE&&!(o.email||'').toLowerCase().includes(fE))return false;
     const d=new Date(o.dateRaw);if(fDF&&d<new Date(fDF))return false;if(fDT&&d>new Date(fDT+'T23:59:59'))return false;if(o.total<fMn||o.total>fMx)return false;
-    if(_statusFilter==='archived'){if(o.status!=='archived')return false;}else{if(o.status==='archived')return false;if(_statusFilter!=='all'&&o.status!==_statusFilter)return false;}
+    if(_statusFilter==='archived'||_statusFilter==='cancelled'){if(o.status!==_statusFilter)return false;}else{if(o.status==='archived'||o.status==='cancelled')return false;if(_statusFilter!=='all'&&o.status!==_statusFilter)return false;}
     return true;});
   const[field,dir]=sort.split('-');
   orders.sort((a,b)=>{let va,vb;if(field==='id'){va=a.no;vb=b.no;}else if(field==='date'){va=new Date(a.dateRaw);vb=new Date(b.dateRaw);}else if(field==='name'){va=(a.name||'').toLowerCase();vb=(b.name||'').toLowerCase();}else{va=a.total;vb=b.total;}if(va<vb)return dir==='asc'?-1:1;if(va>vb)return dir==='asc'?1:-1;return 0;});
@@ -2102,7 +2104,7 @@ function renderOrdersFromList(orders){
   const typed={};el.querySelectorAll('input[id^="trk-"]').forEach(i=>{if(i.value!==i.defaultValue)typed[i.id]=i.value;});
   const focusId=document.activeElement&&el.contains(document.activeElement)?document.activeElement.id:null;
   el.innerHTML=orders.map(o=>{
-    const cls=o.status==='shipped'?'shipped':o.status==='ready'?'ready':o.status==='confirmed'?'confirmed':'';
+    const cls=o.status==='cancelled'?'cancelled':o.status==='shipped'?'shipped':o.status==='ready'?'ready':o.status==='confirmed'?'confirmed':'';
     const tb=o.tracking?`<div style="margin-top:4px"><span style="padding:2px 8px;border-radius:20px;font-size:.74rem;font-weight:600;background:${o.status==='ready'?'#d1e7dd':'#cfe2ff'};color:${o.status==='ready'?'#0f5132':'#084298'}">${o.status==='ready'?'🏪 Ready: ':'📦 '}${esc(o.tracking)}</span></div>`:'';
     return`<div class="order-card ${cls}">
       <h4><span><button onclick="adminViewOrder('${o._key}')" style="background:none;border:none;color:var(--sec);font-weight:800;font-size:.92rem;cursor:pointer;text-decoration:underline;padding:0">🧾 ${esc(o.id)}</button>${o.isNew?'<span class="new-badge">NEW</span>':''}${o.label?` <span style="background:#e8f5e9;color:#2d6a4f;padding:1px 8px;border-radius:20px;font-size:.72rem;font-weight:600;margin-left:3px">${esc(o.label)}</span>`:''}</span><span style="font-size:.74rem;color:var(--muted)">${esc(o.date)}</span><span class="spill s-${o.status}">${slabel(o.status)}</span></h4>
@@ -2117,7 +2119,7 @@ function renderOrdersFromList(orders){
         <button class="edit-btn" onclick="adminViewOrder('${o._key}')">👁 View / Edit</button>
         ${o.status==='pending'?`<button class="save-btn" onclick="confirmO('${o._key}')" style="background:#2d6a4f;margin-top:0">✅ Confirm</button>`:''}
         ${['confirmed','shipped','ready'].includes(o.status)?`<div class="tracking-row" style="margin-top:0"><input type="text" id="trk-${o._key}" placeholder="${o.deliveryMode==='pickup'?'Pickup note':'Tracking number'}" value="${esc(o.tracking||'')}"/>${o.deliveryMode==='pickup'?`<button style="background:#198754" onclick="markReady('${o._key}')">🏪 Ready</button>`:`<button style="background:#0d6efd" onclick="setTrack('${o._key}')">📦 Tracking</button>`}</div>`:''}
-        ${o.status!=='archived'?`<button onclick="archiveOrder('${o._key}')" style="padding:4px 10px;background:#6c757d;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:.74rem">🗄 Archive</button>`:`<button onclick="unarchiveOrder('${o._key}')" style="padding:4px 10px;background:#457b9d;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:.74rem">↩ Unarchive</button>`}
+        ${['pending','confirmed','shipped','ready'].includes(o.status)?`<button onclick="cancelOrder('${o._key}')" style="padding:4px 10px;background:#c1121f;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:.74rem">❌ Cancel & Restock 取消并退回库存</button>`:''}${o.status==='cancelled'?`<button onclick="restoreCancelled('${o._key}')" style="padding:4px 10px;background:#457b9d;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:.74rem">↩ Restore 恢复订单</button>`:''}${o.status==='cancelled'?'':o.status!=='archived'?`<button onclick="archiveOrder('${o._key}')" style="padding:4px 10px;background:#6c757d;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:.74rem">🗄 Archive</button>`:`<button onclick="unarchiveOrder('${o._key}')" style="padding:4px 10px;background:#457b9d;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:.74rem">↩ Unarchive</button>`}
       </div></div>`;
   }).join('');
   // put back anything the admin had typed but not saved yet (tracking numbers)
@@ -2137,6 +2139,47 @@ async function updOrder(key,fields,okText){return saveOp(()=>FB.updateDoc(R.orde
 function confirmO(key){updOrder(key,{status:'confirmed',isNew:false});}
 function setTrack(key){const t=document.getElementById('trk-'+key)?.value.trim();if(!t){toast('Enter tracking no. 请输入单号',2500,'#c1121f');return;}updOrder(key,{tracking:t,status:'shipped',isNew:false});}
 function markReady(key){const n=document.getElementById('trk-'+key)?.value.trim()||'Ready for pickup';updOrder(key,{tracking:n,status:'ready',isNew:false});}
+// ── Cancel & restock (one transaction: order status + stock change together, can't happen twice) ──
+function orderStockChange(o,items,sign,catalog){
+  // Same rules as when the order was placed: tracked variant stock and tracked product stock (-1 = unlimited, never touched).
+  const perProd={};const miss=[],short=[];const cat=catalog||[];
+  (o.items||[]).forEach(it=>{const st=items[it.id];if(!st){miss.push(it.nameEn||it.id);return;}
+    const q=+it.qty||0;const os=(cat.find(p=>p.id===it.id)||{}).oversell;
+    if(st.v&&it.variation&&st.v[it.variation]!=null&&st.v[it.variation]!==-1){const have=st.v[it.variation];
+      if(sign>0)st.v[it.variation]=have+q;else{if(have<q&&!os)short.push(`${it.nameEn} (${it.variation}) — 剩 ${have}`);st.v[it.variation]=Math.max(0,have-q);}}
+    perProd[it.id]=(perProd[it.id]||0)+q;});
+  Object.keys(perProd).forEach(pid=>{const st=items[pid];if(!st||st.p==null||st.p===-1)return;const os=(cat.find(p=>p.id===pid)||{}).oversell;
+    if(sign>0)st.p=st.p+perProd[pid];else{if(st.p<perProd[pid]&&!os)short.push(`${pid} — 剩 ${st.p}`);st.p=Math.max(0,st.p-perProd[pid]);}});
+  return {miss,short};
+}
+async function cancelOrder(key){
+  const o=S.orders.find(x=>x._key===key);if(!o)return;
+  if(!confirm(`取消订单 ${o.id} 并把库存加回去？\nCancel order ${o.id} and return its items to stock?\n\n${o.items.map(i=>`${i.nameEn}${i.variation?' ('+i.variation+')':''} x${i.qty}`).join('\n')}`))return;
+  let miss=[];
+  const ok=await saveOp(()=>FB.runTransaction(FB.db,async tx=>{
+    const os=await tx.get(R.order(key));const ss=await tx.get(R.stock());
+    if(!os.exists())throw prodErr('订单不存在 Order not found.');
+    const od=os.data();if(od.status==='cancelled')throw prodErr('这张订单已经取消了（库存之前已加回）。This order is already cancelled.');
+    const items=JSON.parse(JSON.stringify(ss.exists()?(ss.data().items||{}):{}));
+    miss=orderStockChange(od,items,+1).miss;
+    tx.update(R.order(key),{status:'cancelled',prevStatus:od.status,restocked:true,cancelledAt:FB.serverTimestamp(),isNew:false});
+    tx.set(R.stock(),{items,lastKey:'admin'});
+  }),null,`❌ ${o.id} 已取消，库存已加回 Cancelled & restocked`);
+  if(ok&&miss.length)toast(`⚠️ 这些产品已被删除，没有库存可加回: ${miss.join(', ')}`,6000,'#b8860b');
+}
+async function restoreCancelled(key){
+  const o=S.orders.find(x=>x._key===key);if(!o)return;
+  if(!confirm(`恢复订单 ${o.id}？库存会再扣一次。\nRestore order ${o.id}? Its items will be taken from stock again.`))return;
+  await saveOp(()=>FB.runTransaction(FB.db,async tx=>{
+    const os=await tx.get(R.order(key));const ss=await tx.get(R.stock());const cs=await tx.get(R.catalog());
+    const od=os.data();if(!od||od.status!=='cancelled')throw prodErr('这张订单没有被取消。This order is not cancelled.');
+    const items=JSON.parse(JSON.stringify(ss.exists()?(ss.data().items||{}):{}));
+    const r=orderStockChange(od,items,-1,cs.exists()?(cs.data().products||[]):[]);
+    if(r.short.length)throw prodErr('库存不够，无法恢复: '+r.short.join(', ')+'。请先到产品加库存。Not enough stock to restore.');
+    tx.update(R.order(key),{status:od.prevStatus&&od.prevStatus!=='cancelled'?od.prevStatus:'pending',restocked:false,isNew:false});
+    tx.set(R.stock(),{items,lastKey:'admin'});
+  }),null,`↩ ${o.id} 已恢复，库存已扣回 Restored`);
+}
 function archiveOrder(key){updOrder(key,{status:'archived',isNew:false},'🗄 Archived 已归档');}
 function unarchiveOrder(key){updOrder(key,{status:'pending',isNew:false},'↩ Restored 已还原');}
 function ensureOrderModal(){if(document.getElementById('adminOrderModal'))return;const m=document.createElement('div');m.id='adminOrderModal';m.className='modal-overlay';m.innerHTML=`<div class="modal-box" style="max-width:680px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px"><h3 style="color:var(--sec)">Order Details &amp; Edit</h3><button onclick="closeOrderModal()" style="background:none;border:none;font-size:1.4rem;cursor:pointer">✕</button></div><div id="adminOrderModalContent"></div></div>`;document.body.appendChild(m);}
@@ -2147,7 +2190,7 @@ function adminViewOrder(key){
     <div style="background:#f0f7ff;border-radius:8px;padding:12px;margin-bottom:12px">
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px"><b style="font-size:1rem;color:var(--sec)">${esc(o.id)}</b> <span style="font-size:.8rem;color:var(--muted)">${esc(o.date)}</span></div>
       <div class="fg"><label style="font-size:.78rem;font-weight:600;color:var(--muted)">Order Label (optional tag)</label><input type="text" id="eo-label" value="${esc(o.label||'')}" placeholder="e.g. VIP, Gift, Bulk..."/></div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><select id="eo-status" style="padding:5px 8px;border:1px solid var(--border);border-radius:5px;font-size:.84rem;width:auto">${['pending','confirmed','shipped','ready','archived'].map(s=>`<option value="${s}" ${o.status===s?'selected':''}>${slabel(s)}</option>`).join('')}</select><input type="text" id="eo-tracking" value="${esc(o.tracking||'')}" placeholder="Tracking / Pickup note" style="flex:1;min-width:150px"/></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><select id="eo-status" ${o.status==='cancelled'?'disabled':''} style="padding:5px 8px;border:1px solid var(--border);border-radius:5px;font-size:.84rem;width:auto">${(o.status==='cancelled'?['cancelled']:['pending','confirmed','shipped','ready','archived']).map(s=>`<option value="${s}" ${o.status===s?'selected':''}>${slabel(s)}</option>`).join('')}</select>${o.status==='cancelled'?'<span class="hint">已取消 — 用订单上的 ↩ Restore 恢复</span>':''}<input type="text" id="eo-tracking" value="${esc(o.tracking||'')}" placeholder="Tracking / Pickup note" style="flex:1;min-width:150px"/></div>
     </div>
     <div style="margin-bottom:12px"><b style="font-size:.85rem;color:var(--sec)">CUSTOMER INFO</b><div class="fr" style="margin-top:7px"><div class="fg"><label>Name</label><input type="text" id="eo-name" value="${esc(o.name)}"/></div><div class="fg"><label>Phone</label><input type="text" id="eo-phone" value="${esc(o.phone)}"/></div></div><div class="fg"><label>Email</label><input type="text" id="eo-email" value="${esc(o.email)}"/></div></div>
     <div style="margin-bottom:12px"><b style="font-size:.85rem;color:var(--sec)">DELIVERY</b><div class="fr" style="margin-top:7px"><div class="fg"><label>Mode</label><select id="eo-mode"><option value="delivery" ${o.deliveryMode!=='pickup'?'selected':''}>🚚 Delivery</option><option value="pickup" ${o.deliveryMode==='pickup'?'selected':''}>🏪 Pickup</option></select></div><div class="fg"><label>Region</label><select id="eo-region">${REGIONS.map(r=>`<option value="${r}" ${o.region===r?'selected':''}>${r}</option>`).join('')}<option value="Pickup" ${o.region==='Pickup'?'selected':''}>Pickup</option></select></div></div><div class="fr"><div class="fg"><label>Postcode</label><input type="text" id="eo-postcode" value="${esc(o.postcode||'')}"/></div><div class="fg"><label>Shipping Fee (RM)</label><input type="number" id="eo-ship" value="${money(o.shipping)}" step="0.01" min="0"/></div></div><div class="fg"><label>Address</label><textarea id="eo-addr" rows="3">${esc(o.addr)}</textarea></div></div>
@@ -2194,7 +2237,7 @@ function custOrders(c){const e=normEmail(c.email);return S.orders.filter(o=>o.ac
 function allCustomers(){
   const list=S.customers.map(c=>({...c}));const known=new Set(list.map(c=>normEmail(c.email)));
   S.orders.forEach(o=>{if(o.accountEmail&&!known.has(o.accountEmail)){known.add(o.accountEmail);list.push({id:custIdFor(o.email),name:o.name,email:o.email,phone:o.phone,_virtual:true});}});
-  list.forEach(c=>{const co=custOrders(c);c._orders=co;c._spend=co.reduce((a,o)=>a+o.total,0);const first=co.length?co.reduce((m,o)=>o.dateRaw<m?o.dateRaw:m,co[0].dateRaw):null;c.joinDateRaw=first||'';c.joinDate=first?new Date(first).toLocaleString():'—';});
+  list.forEach(c=>{const co=custOrders(c);c._orders=co;c._spend=co.filter(o=>o.status!=='cancelled').reduce((a,o)=>a+o.total,0);const first=co.length?co.reduce((m,o)=>o.dateRaw<m?o.dateRaw:m,co[0].dateRaw):null;c.joinDateRaw=first||'';c.joinDate=first?new Date(first).toLocaleString():'—';});
   return list;
 }
 function renderCustomerList(){
@@ -2247,7 +2290,7 @@ function clearMsgFilter(){['msgFName','msgFPhone','msgFEmail'].forEach(id=>{cons
 // ═══ PART 7a — Analytics (unchanged logic, archived orders excluded) ═══
 function applyAnRangePreset(){const preset=document.getElementById('anRangePreset').value;const today=new Date();const fmt=d=>{const z=new Date(d.getTime()-d.getTimezoneOffset()*60000);return z.toISOString().slice(0,10);};const toEl=document.getElementById('anTo'),fromEl=document.getElementById('anFrom');toEl.value=fmt(today);if(preset==='today')fromEl.value=fmt(today);else if(preset==='yesterday'){const d=new Date(today);d.setDate(d.getDate()-1);fromEl.value=fmt(d);toEl.value=fmt(d);}else if(preset==='month'){fromEl.value=fmt(new Date(today.getFullYear(),today.getMonth(),1));}else if(preset==='lastmonth'){const lm=new Date(today.getFullYear(),today.getMonth()-1,1);fromEl.value=fmt(lm);toEl.value=fmt(new Date(today.getFullYear(),today.getMonth(),0));}else if(preset==='all')fromEl.value='2000-01-01';else if(preset!=='custom'){const d=new Date();d.setDate(d.getDate()-parseInt(preset)+1);fromEl.value=fmt(d);}renderAnalytics();}
 function getAnRange(){const fromEl=document.getElementById('anFrom'),toEl=document.getElementById('anTo');if(fromEl&&!fromEl.value){const d=new Date();d.setDate(d.getDate()-29);fromEl.value=d.toISOString().slice(0,10);}if(toEl&&!toEl.value)toEl.value=new Date().toISOString().slice(0,10);return{from:fromEl?.value,to:toEl?.value};}
-function ordersInRange(from,to){return S.orders.filter(o=>o.status!=='archived').filter(o=>{const d=new Date(o.dateRaw||o.date);if(from&&d<new Date(from))return false;if(to&&d>new Date(to+'T23:59:59'))return false;return true;});}
+function ordersInRange(from,to){return S.orders.filter(o=>o.status!=='archived'&&o.status!=='cancelled').filter(o=>{const d=new Date(o.dateRaw||o.date);if(from&&d<new Date(from))return false;if(to&&d>new Date(to+'T23:59:59'))return false;return true;});}
 function pctChange(cur,prev){if(!prev)return cur>0?{v:'+100%',up:true}:{v:'0%',up:true};const c=((cur-prev)/prev)*100;return{v:(c>=0?'+':'')+c.toFixed(0)+'%',up:c>=0};}
 function kpiCard(label,val,prev,compare,fmt='RM',highlight=false){const fmtVal=v=>fmt==='RM'?`RM ${v.toFixed(0)}`:fmt==='pct'?`${v.toFixed(0)}%`:String(Math.round(v));const ch=compare&&prev!=null?pctChange(val,prev):null;return`<div class="kpi-card${highlight?' highlight':''}"><div class="kpi-val">${fmtVal(val)}</div><div class="kpi-label">${label}</div>${ch?`<span class="kpi-change ${ch.up?'kpi-up':'kpi-dn'}">${ch.v} vs prev</span>`:''}</div>`;}
 function barChart(vals,keys,color='var(--pri)'){const max=Math.max(...vals,1);return`<div class="bar-chart">${vals.map((v,i)=>`<div class="bar" style="height:${Math.round(v/max*100)}%;background:${color}" data-tip="${keys[i]}: ${typeof v==='number'&&v%1!==0?v.toFixed(2):v}"></div>`).join('')}</div><div class="bar-labels">${keys.map(k=>`<div class="bar-label">${k}</div>`).join('')}</div>`;}
