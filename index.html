@@ -954,7 +954,17 @@ let _loaded={config:false,catalog:false,stock:false};
 // ── tiny utils ──
 function esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function pad(n){return String(n).padStart(2,'0');}
-function IS(u){return PREVIEW[u]||u||'';}
+// Newly uploaded images take ~1 minute to be published on GitHub Pages. Until then (and if a browser
+// has cached the "not found"), load the very same file straight from the GitHub repository instead.
+const GHFB={};
+function ghRaw(u){const m=String(u||'').match(/^https:\/\/([a-z0-9-]+)\.github\.io\/((?:img|qr|slides|logo|popup|brand|favicon|uploads)\/[^?#]+)/i);
+  return m?`https://raw.githubusercontent.com/${m[1]}/${m[1]}.github.io/main/${m[2]}`:null;}
+function IS(u){return PREVIEW[u]||GHFB[u]||u||'';}
+document.addEventListener('error',e=>{const im=e.target;if(!(im instanceof HTMLImageElement)||im.dataset.ghfb)return;
+  const raw=ghRaw(im.currentSrc||im.src);if(!raw)return;im.dataset.ghfb='1';GHFB[im.src]=raw;
+  im.addEventListener('load',()=>{im.style.opacity='';im.title='';},{once:true});im.src=raw;},true);
+// CSS background images (slides) don't fire 'error' — check them with a hidden image and redraw if needed.
+function ghProbe(u,redraw){if(!u||GHFB[u]||!ghRaw(u))return;const t=new Image();t.onerror=()=>{if(!GHFB[u]){GHFB[u]=ghRaw(u);redraw&&redraw();}};t.src=u;}
 function isImg(u){return !!u&&(u.startsWith('http')||u.startsWith('data:'));}
 function money(n){return (Number(n)||0).toFixed(2);}
 function randKey(n=24){const a='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';const r=crypto.getRandomValues(new Uint8Array(n));return Array.from(r,x=>a[x%a.length]).join('');}
@@ -1278,7 +1288,7 @@ function showPage(p){
   if(p==='checkout')renderCheckoutPage();
   window.scrollTo(0,0);
 }
-function renderSlideshow(){const slides=S.slides||[];const container=document.getElementById('slidesContainer');const dots=document.getElementById('slideDots');if(!slides.length){container.innerHTML=`<div class="slide active"><div class="slide-bg" style="background:var(--pri)"></div><div class="slide-content"><h2>${esc(S.branding.shopEn||'My Shop')}</h2></div></div>`;dots.innerHTML='';return;}container.innerHTML=slides.map((sl,i)=>`<div class="slide${i===0?' active':''}" id="slide-${i}">${sl.img?`<div class="slide-bg" style="background-image:url('${esc(IS(sl.img))}')"></div>`:'<div class="slide-bg" style="background:var(--pri)"></div>'}<div class="slide-overlay" style="background:${esc(sl.overlayColor||'#000')};opacity:${sl.overlayOpacity!=null?sl.overlayOpacity:.35}"></div><div class="slide-content"><h2>${esc(lang==='en'?sl.titleEn:sl.titleCn)}</h2>${(lang==='en'?sl.subEn:sl.subCn)?`<p>${esc(lang==='en'?sl.subEn:sl.subCn)}</p>`:''}${S.branding.showShopNow!==false?`<button class="hero-cta" onclick="document.getElementById('prodSec').scrollIntoView({behavior:'smooth'})">Shop Now 立即购物</button>`:''}</div></div>`).join('');dots.innerHTML=slides.map((_,i)=>`<div class="sdot${i===0?' active':''}" onclick="goSlide(${i})"></div>`).join('');curSlide=0;startSlideAuto();}
+function renderSlideshow(){const slides=S.slides||[];slides.forEach(sl=>ghProbe(sl.img,renderSlideshow));const container=document.getElementById('slidesContainer');const dots=document.getElementById('slideDots');if(!slides.length){container.innerHTML=`<div class="slide active"><div class="slide-bg" style="background:var(--pri)"></div><div class="slide-content"><h2>${esc(S.branding.shopEn||'My Shop')}</h2></div></div>`;dots.innerHTML='';return;}container.innerHTML=slides.map((sl,i)=>`<div class="slide${i===0?' active':''}" id="slide-${i}">${sl.img?`<div class="slide-bg" style="background-image:url('${esc(IS(sl.img))}')"></div>`:'<div class="slide-bg" style="background:var(--pri)"></div>'}<div class="slide-overlay" style="background:${esc(sl.overlayColor||'#000')};opacity:${sl.overlayOpacity!=null?sl.overlayOpacity:.35}"></div><div class="slide-content"><h2>${esc(lang==='en'?sl.titleEn:sl.titleCn)}</h2>${(lang==='en'?sl.subEn:sl.subCn)?`<p>${esc(lang==='en'?sl.subEn:sl.subCn)}</p>`:''}${S.branding.showShopNow!==false?`<button class="hero-cta" onclick="document.getElementById('prodSec').scrollIntoView({behavior:'smooth'})">Shop Now 立即购物</button>`:''}</div></div>`).join('');dots.innerHTML=slides.map((_,i)=>`<div class="sdot${i===0?' active':''}" onclick="goSlide(${i})"></div>`).join('');curSlide=0;startSlideAuto();}
 function goSlide(n){const total=(S.slides||[]).length;if(!total)return;document.getElementById('slide-'+curSlide)?.classList.remove('active');document.querySelectorAll('.sdot')[curSlide]?.classList.remove('active');curSlide=(n+total)%total;document.getElementById('slide-'+curSlide)?.classList.add('active');document.querySelectorAll('.sdot')[curSlide]?.classList.add('active');}
 function moveSlide(d){goSlide(curSlide+d);}
 function startSlideAuto(){if(slideTimer)clearInterval(slideTimer);if((S.slides||[]).length>1)slideTimer=setInterval(()=>moveSlide(1),5000);}
