@@ -41,7 +41,8 @@ window.FB = {
   serverTimestamp, increment, arrayUnion, deleteField,
   signInWithEmailAndPassword, signOut, onAuthStateChanged,
   sendPasswordResetEmail, updatePassword, reauthenticateWithCredential, EmailAuthProvider,
-  ADMIN_EMAIL: 'wkiat.onehealthysolution@gmail.com'
+  ADMIN_EMAIL: 'onehealthy17@gmail.com',
+  ADMIN_EMAILS: ['onehealthy17@gmail.com','wkiat.onehealthysolution@gmail.com']   // the shop's admin login(s)
 };
 window.dispatchEvent(new Event('fb-ready'));
 </script>
@@ -1259,7 +1260,7 @@ function boot(){
   cart=lsGet('twdg_cart',[]);updateCartBadge();
   startPublicSync();
   FB.onAuthStateChanged(FB.auth,user=>{
-    const ok=user&&normEmail(user.email)===normEmail(FB.ADMIN_EMAIL);
+    const ok=user&&(FB.ADMIN_EMAILS||[FB.ADMIN_EMAIL]).map(normEmail).includes(normEmail(user.email));
     ADMIN.user=ok?user:null;
     if(ok){startAdminSync();showAdminPanel();}
     else{stopAdminSync();S.orders=[];S.customers=[];S.contactMessages=[];S.discounts=[];
