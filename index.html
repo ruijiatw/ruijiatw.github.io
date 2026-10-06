@@ -1111,8 +1111,9 @@ async function txSaveProduct(p,{remove=false,keepStock=false,mode='',fields=null
       if(i>-1)list[i]=c;else list.push(c);
       saved=c;
       if(keepStock&&stock[p.id]){/* leave live stock exactly as it is */}
-      else stock[p.id]=mode==='add'||!p.stockOps?mergeStockEntry(stock[p.id],p)
-        :mergeStockEntry(stock[p.id],{variants:c.variants||[],stockOps:p.stockOps});
+      else if(mode==='add'||!stock[p.id])stock[p.id]=mergeStockEntry(stock[p.id],p);
+      else if(p.stockOps)stock[p.id]=mergeStockEntry(stock[p.id],{variants:c.variants||[],stockOps:p.stockOps});
+      /* an edit that says nothing about stock never touches the live stock numbers */
     }
     tx.set(R.catalog(),{products:list,updatedAt:FB.serverTimestamp()});
     tx.set(R.stock(),{items:stock,lastKey:'admin'});
