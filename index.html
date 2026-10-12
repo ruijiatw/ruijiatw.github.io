@@ -102,6 +102,24 @@ main{flex:1}
 .cart-table th{background:#f5f5f5;font-weight:600}
 .cart-thumb{width:44px;height:44px;border-radius:6px;object-fit:cover;background:#f0f0f0;display:flex;align-items:center;justify-content:center;font-size:1.3rem;overflow:hidden}
 .remove-btn{background:none;border:none;color:var(--pri);cursor:pointer;font-size:.95rem}
+/* Phone: cart rows become cards so the remove button and line total are always on screen */
+@media (max-width:640px){
+  .cart-table thead{display:none}
+  .cart-table,.cart-table tbody{display:block;width:100%}
+  .cart-table tr{display:grid;grid-template-columns:52px minmax(0,1fr) 40px;grid-template-areas:"img name rm" "img var rm" "img unit rm" "qty qty total";column-gap:10px;row-gap:3px;padding:12px 2px;border-bottom:1px solid var(--border);align-items:center}
+  .cart-table td{border:none;padding:0;font-size:.86rem;min-width:0}
+  .cart-table td:nth-child(1){grid-area:img;align-self:start}
+  .cart-table td:nth-child(2){grid-area:name;word-break:break-word}
+  .cart-table td:nth-child(3){grid-area:var;color:var(--muted)}
+  .cart-table td:nth-child(5){grid-area:unit;color:var(--muted);font-size:.8rem}
+  .cart-table td:nth-child(5)::before{content:"Unit 单价 "}
+  .cart-table td:nth-child(4){grid-area:qty;padding-top:6px}
+  .cart-table td:nth-child(6){grid-area:total;text-align:right;font-weight:700;padding-top:6px}
+  .cart-table td:nth-child(7){grid-area:rm;align-self:start}
+  .cart-table .qty-row{margin-bottom:0}
+  .cart-table .qty-row button{width:34px;height:34px;font-size:1.05rem}
+  .remove-btn{width:36px;height:36px;border:1px solid var(--border)!important;border-radius:50%;background:#fff!important;font-size:1rem}
+}
 .summary-box{background:var(--card);border-radius:var(--r);padding:13px;margin-top:11px;box-shadow:0 1px 5px rgba(0,0,0,.06)}
 .s-row{display:flex;justify-content:space-between;padding:4px 0;font-size:.9rem}
 .s-row.total{font-weight:700;font-size:1.02rem;border-top:2px solid var(--border);margin-top:6px;padding-top:8px}
@@ -1420,9 +1438,9 @@ function renderCart(){
   if(!cart.length){c.innerHTML=`<div class="empty">Your cart is empty. 购物车是空的。</div>`;return;}
   const lines=cartLines();const sub=lines.filter(l=>!l.missing).reduce((a,x)=>a+x.price*x.qty,0);
   const anyMissing=lines.some(l=>l.missing);
-  c.innerHTML=`<table class="cart-table"><thead><tr><th></th><th>Product</th><th>Variant</th><th>Qty</th><th>Unit</th><th>Total</th><th></th></tr></thead><tbody>${lines.map((it,i)=>{const th=isImg(it.img)?`<img src="${esc(IS(it.img))}" class="cart-thumb">`:`<div class="cart-thumb">${esc(it.img||'📦')}</div>`;return`<tr style="${it.missing?'opacity:.5':''}"><td>${th}</td><td><b>${esc(lang==='en'?it.nameEn:it.nameCn)}</b>${it.missing?'<br><span style="color:var(--pri);font-size:.75rem">Unavailable 已下架 — please remove</span>':''}</td><td>${esc(it.variation||'—')}</td><td><div class="qty-row"><button onclick="cQ(${i},-1)">−</button><span>${it.qty}</span><button onclick="cQ(${i},1)">+</button></div></td><td>RM ${money(it.price)}</td><td>RM ${money(it.price*it.qty)}</td><td><button class="remove-btn" onclick="rmCart(${i})">✕</button></td></tr>`;}).join('')}</tbody></table><div class="summary-box"><div class="s-row"><span>Subtotal</span><span>RM ${money(sub)}</span></div><div class="s-row"><span>Shipping (at checkout)</span><span>—</span></div><div class="s-row total"><span>Est. Total</span><span>RM ${money(sub)}+</span></div></div><div class="fg" style="margin-top:11px"><label style="font-weight:600;font-size:.85rem;display:block;margin-bottom:5px">📝 Remarks (optional)</label><textarea id="cartRemarks" rows="2" placeholder="e.g. Gift wrap, special instructions..." style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:.86rem">${esc(window._cartRemarks||'')}</textarea></div><button class="checkout-btn" onclick="goCheckout()" ${anyMissing?'disabled style="background:#adb5bd"':''}>Proceed to Checkout 继续结账</button>`;
+  c.innerHTML=`<table class="cart-table"><thead><tr><th></th><th>Product</th><th>Variant</th><th>Qty</th><th>Unit</th><th>Total</th><th></th></tr></thead><tbody>${lines.map((it,i)=>{const th=isImg(it.img)?`<img src="${esc(IS(it.img))}" class="cart-thumb">`:`<div class="cart-thumb">${esc(it.img||'📦')}</div>`;return`<tr style="${it.missing?'opacity:.5':''}"><td>${th}</td><td><b>${esc(lang==='en'?it.nameEn:it.nameCn)}</b>${it.missing?'<br><span style="color:var(--pri);font-size:.75rem">Unavailable 已下架 — please remove</span>':''}</td><td>${esc(it.variation||'—')}</td><td><div class="qty-row"><button onclick="cQ(${i},-1)">−</button><span>${it.qty}</span><button onclick="cQ(${i},1)">+</button></div></td><td>RM ${money(it.price)}</td><td>RM ${money(it.price*it.qty)}</td><td><button class="remove-btn" onclick="rmCart(${i})" title="Remove 移除" aria-label="Remove 移除">✕</button></td></tr>`;}).join('')}</tbody></table><div class="summary-box"><div class="s-row"><span>Subtotal</span><span>RM ${money(sub)}</span></div><div class="s-row"><span>Shipping (at checkout)</span><span>—</span></div><div class="s-row total"><span>Est. Total</span><span>RM ${money(sub)}+</span></div></div><div class="fg" style="margin-top:11px"><label style="font-weight:600;font-size:.85rem;display:block;margin-bottom:5px">📝 Remarks (optional)</label><textarea id="cartRemarks" rows="2" placeholder="e.g. Gift wrap, special instructions..." style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:.86rem">${esc(window._cartRemarks||'')}</textarea></div><button class="checkout-btn" onclick="goCheckout()" ${anyMissing?'disabled style="background:#adb5bd"':''}>Proceed to Checkout 继续结账</button>`;
 }
-function cQ(i,d){const c=cart[i];if(!c)return;const p=S.products.find(x=>x.id===c.id);if(d>0&&p&&!p.oversell){const av=availQty(p,c.variation||null);if(av!==-1&&inCartQty(c.id,c.variation)+d>av){toast(`Only ${av} left 仅剩${av}件`,2500,'#c1121f');return;}}c.qty=Math.max(1,c.qty+d);saveCart();renderCart();}
+function cQ(i,d){const c=cart[i];if(!c)return;if(d<0&&c.qty<=1){if(confirm(lang==='cn'?'移除此商品？':'Remove this item from your cart? 移除此商品？'))rmCart(i);return;}const p=S.products.find(x=>x.id===c.id);if(d>0&&p&&!p.oversell){const av=availQty(p,c.variation||null);if(av!==-1&&inCartQty(c.id,c.variation)+d>av){toast(`Only ${av} left 仅剩${av}件`,2500,'#c1121f');return;}}c.qty=Math.max(1,c.qty+d);saveCart();renderCart();}
 function rmCart(i){cart.splice(i,1);saveCart();renderCart();}
 function goCheckout(){if(!cart.length){alert('Cart is empty.');return;}const rem=document.getElementById('cartRemarks');if(rem)window._cartRemarks=rem.value;showPage('checkout');}
 
