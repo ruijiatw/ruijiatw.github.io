@@ -1222,7 +1222,7 @@ function afterPublicData(what){
   else{renderProducts();}
   if(isAdminView()){
     if(what==='catalog'||what==='stock'){if(!document.querySelector('.prod-edit-panel.open'))renderProductList();else if(what==='stock'&&typeof epSyncStock==='function')epSyncStock();}
-    if(what==='config'){refFillFilter();const ae=document.activeElement;if(!(ae&&ae.closest&&ae.closest('#tab-referral')&&/INPUT|TEXTAREA/.test(ae.tagName)))renderReferralAdmin();}
+    if(what==='config')refLiveConfig();
   }
 }
 function bootError(e){
@@ -2624,6 +2624,11 @@ setTimeout(()=>{if(!window.FB){const el=document.getElementById('fb-loading');if
 let _refDraft=null;
 function refName(o){if(!o||!o.referrer)return '';const x=o.referrerId&&((S.referral&&S.referral.options)||[]).find(r=>r.id===o.referrerId);return x&&x.name?x.name:o.referrer;}
 function refKey(o){return o.referrerId||('name:'+String(o.referrer||'').trim().toLowerCase());}
+// Another admin (or another tab) saved settings. Only redraw the name list when the referral list itself changed,
+// so someone typing a rename is not interrupted by an unrelated settings save.
+function refLiveConfig(){refFillFilter();if(_cfgBase.referral!==undefined&&cfgNorm('referral',S.referral)===_cfgBase.referral){renderReferralStats();return;}
+  const dirty=_refDraft&&_refDraft.options.some((o,i)=>{const el=document.getElementById('refName-'+i);return el&&el.value.trim()!==o.name;});
+  renderReferralAdmin();if(dirty)showMsg('refMsg','error','其他管理员刚改了介绍人名单，已载入最新名单，请再改一次。Another admin just changed the list — reloaded, please redo your edit.');}
 function refRead(){if(!_refDraft)return;_refDraft.options.forEach((o,i)=>{const el=document.getElementById('refName-'+i);if(el)o.name=el.value.trim().slice(0,80);});}
 function renderReferralAdmin(){
   const box=document.getElementById('refAdminList');if(!box)return;
@@ -2632,7 +2637,7 @@ function renderReferralAdmin(){
   const ck=(id,v)=>{const e=document.getElementById(id);if(e)e.checked=!!v;};ck('refEnabled',_refDraft.enabled);ck('refRequired',_refDraft.required);
   const n=_refDraft.options.length,act=_refDraft.options.filter(o=>o.active!==false).length;
   const rc=document.getElementById('refCount');if(rc)rc.textContent=`(${act} shown / ${n} total 显示${act}个 / 共${n}个)`;
-  box.innerHTML=n?_refDraft.options.map((o,i)=>`<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap"><span style="width:22px;color:var(--muted);font-size:.8rem">${i+1}.</span><input type="text" id="refName-${i}" value="${esc(o.name)}" maxlength="80" style="flex:1;min-width:120px"/><label class="toggle-sw" title="Show to customers 显示给顾客"><input type="checkbox" ${o.active!==false?'checked':''} onchange="refSetActive(${i},this.checked)"><span class="slider"></span></label><span style="font-size:.72rem;width:44px;color:${o.active!==false?'#0f5132':'var(--muted)'}">${o.active!==false?'Shown':'Hidden'}</span><button class="fbtn clear" style="padding:4px 8px" ${i===0?'disabled':''} onclick="refMove(${i},-1)">↑</button><button class="fbtn clear" style="padding:4px 8px" ${i===n-1?'disabled':''} onclick="refMove(${i},1)">↓</button><button class="fbtn clear" style="padding:4px 8px;color:#c1121f" onclick="refDel(${i})">✕</button></div>`).join(''):'<div class="empty" style="padding:10px">No names yet. Add below. 还没有名字，请在下面添加。</div>';
+  box.innerHTML=n?_refDraft.options.map((o,i)=>`<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap"><span style="width:22px;color:var(--muted);font-size:.8rem">${i+1}.</span><input type="text" id="refName-${i}" value="${esc(o.name)}" maxlength="80" style="flex:1;min-width:150px"/><span style="display:flex;gap:6px;align-items:center;margin-left:auto"><label class="toggle-sw" title="Show to customers 显示给顾客"><input type="checkbox" ${o.active!==false?'checked':''} onchange="refSetActive(${i},this.checked)"><span class="slider"></span></label><span style="font-size:.72rem;width:44px;color:${o.active!==false?'#0f5132':'var(--muted)'}">${o.active!==false?'Shown':'Hidden'}</span><button class="fbtn clear" style="padding:4px 8px" ${i===0?'disabled':''} onclick="refMove(${i},-1)">↑</button><button class="fbtn clear" style="padding:4px 8px" ${i===n-1?'disabled':''} onclick="refMove(${i},1)">↓</button><button class="fbtn clear" style="padding:4px 8px;color:#c1121f" onclick="refDel(${i})">✕</button></span></div>`).join(''):'<div class="empty" style="padding:10px">No names yet. Add below. 还没有名字，请在下面添加。</div>';
   if(!_refDraft.enabled&&n)box.insertAdjacentHTML('afterbegin','<div style="background:#fff3cd;border-radius:6px;padding:6px 10px;font-size:.8rem;margin-bottom:8px">⚠️ Turned off — customers do not see this yet. 目前关闭，顾客看不到。</div>');
   else if(_refDraft.enabled&&!act)box.insertAdjacentHTML('afterbegin','<div style="background:#fff3cd;border-radius:6px;padding:6px 10px;font-size:.8rem;margin-bottom:8px">⚠️ No names shown — the option is hidden at checkout until you add or show a name. 没有可选名字，结账页暂时不会显示。</div>');
   refFillFilter();renderReferralStats();
@@ -2667,7 +2672,7 @@ function renderReferralStats(){const el=document.getElementById('refStats');if(!
   const orders=S.orders.filter(o=>o.status!=='cancelled').filter(o=>{const d=orderTime(o);if(from&&d<new Date(from))return false;if(to&&d>new Date(to+'T23:59:59'))return false;return true;});
   const gs=refGroups(orders);const none=orders.filter(o=>!o.referrer);const tot=k=>gs.reduce((a,g)=>a+g[k],0);
   if(!orders.length){el.innerHTML='<div class="empty" style="padding:12px">No orders in this period. 这段时间没有订单。</div>';return;}
-  el.innerHTML=`<div style="overflow-x:auto"><table class="an-table"><thead><tr><th>Referrer 介绍人</th><th>Orders 订单</th><th>Units 件数</th><th>Products RM 商品额</th><th>Order Total RM 订单总额</th><th></th></tr></thead><tbody>${gs.map(g=>`<tr><td><b>${esc(g.name)}</b></td><td>${g.orders}</td><td>${g.units}</td><td>RM ${money(g.goods)}</td><td style="font-weight:700;color:var(--pri)">RM ${money(g.rev)}</td><td><button class="fbtn clear" style="padding:3px 8px" onclick="refShowOrders('${esc(g.key)}')">View 查看</button></td></tr>`).join('')}
+  el.innerHTML=`<div style="overflow-x:auto"><table class="an-table"><thead><tr><th>Referrer 介绍人</th><th>Orders 订单</th><th>Units 件数</th><th>Products RM 商品额</th><th>Order Total RM 订单总额</th><th></th></tr></thead><tbody>${gs.map(g=>`<tr><td><b>${esc(g.name)}</b></td><td>${g.orders}</td><td>${g.units}</td><td>RM ${money(g.goods)}</td><td style="font-weight:700;color:var(--pri)">RM ${money(g.rev)}</td><td><button class="fbtn clear" style="padding:3px 8px" onclick="refShowOrders(decodeURIComponent('${encodeURIComponent(g.key).replace(/'/g,'%27')}'))">View 查看</button></td></tr>`).join('')}
   <tr style="background:#f6f7f9"><td><b>Total with referrer 有介绍人合计</b></td><td><b>${tot('orders')}</b></td><td><b>${tot('units')}</b></td><td><b>RM ${money(tot('goods'))}</b></td><td><b>RM ${money(tot('rev'))}</b></td><td></td></tr>
   <tr><td style="color:var(--muted)">No referrer 没有介绍人</td><td>${none.length}</td><td>${none.reduce((a,o)=>a+(o.items||[]).reduce((b,i)=>b+(+i.qty||0),0),0)}</td><td>RM ${money(none.reduce((a,o)=>a+(o.items||[]).reduce((b,i)=>b+i.price*i.qty,0),0))}</td><td>RM ${money(none.reduce((a,o)=>a+(+o.total||0),0))}</td><td><button class="fbtn clear" style="padding:3px 8px" onclick="refShowOrders('__none')">View 查看</button></td></tr></tbody></table></div><p class="hint" style="margin-top:6px">Products RM = items only (no shipping, before discount). Order Total = what the customer paid. 商品额=只算商品（不含运费、未扣折扣）；订单总额=顾客实付。</p>`;}
 function refShowOrders(k){clearFilters();refFillFilter();const sel=document.getElementById('fReferrer');if(sel)sel.value=k;const b=document.getElementById('tabbtn-orders');if(b)adminTab('orders',b);}
