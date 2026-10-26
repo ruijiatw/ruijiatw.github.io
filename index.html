@@ -472,6 +472,7 @@ html,body{overflow-x:hidden;max-width:100vw}
         <button class="tab-btn" id="tabbtn-messages" onclick="adminTab('messages',this)">Messages</button>
         <button class="tab-btn" onclick="adminTab('analytics',this)">Analytics</button>
         <button class="tab-btn" onclick="adminTab('discounts',this)">Discounts</button>
+        <button class="tab-btn" onclick="adminTab('referral',this)">Referral 介绍人</button>
         <button class="tab-btn" onclick="adminTab('branding',this)">Branding</button>
         <button class="tab-btn" onclick="adminTab('footer',this)">Footer</button>
         <button class="tab-btn" onclick="adminTab('settings',this)">Settings</button>
@@ -528,6 +529,7 @@ html,body{overflow-x:hidden;max-width:100vw}
             <div class="fg2"><label>Customer Name</label><input type="text" id="fName" oninput="applyFilters()"/></div>
             <div class="fg2"><label>Phone</label><input type="text" id="fPhone" oninput="applyFilters()"/></div>
             <div class="fg2"><label>Email</label><input type="text" id="fEmail" oninput="applyFilters()"/></div>
+            <div class="fg2"><label>Referred By 介绍人</label><select id="fReferrer" onchange="applyFilters()"><option value="">All</option></select></div>
             <div class="fg2"><label>Date From</label><input type="date" id="fDateFrom" onchange="applyFilters()"/></div>
             <div class="fg2"><label>Date To</label><input type="date" id="fDateTo" onchange="applyFilters()"/></div>
             <div class="fg2"><label>Min RM</label><input type="number" id="fMinT" oninput="applyFilters()"/></div>
@@ -637,6 +639,25 @@ html,body{overflow-x:hidden;max-width:100vw}
           <div class="an-tab" onclick="anSection('orders',this)">Orders</div>
         </div>
         <div id="analyticsContent"></div>
+      </div>
+      <!-- REFERRAL -->
+      <div class="admin-section" id="tab-referral">
+        <div class="card"><h3>Referral 介绍人 — Checkout Option</h3>
+          <p class="hint" style="margin-bottom:10px">Customers choose who referred them at checkout (between Remarks and Payment). 顾客在结账时选择介绍人（备注和付款之间）。</p>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><label class="toggle-sw"><input type="checkbox" id="refEnabled" onchange="refToggle('enabled',this.checked)"><span class="slider"></span></label><span style="font-size:.84rem">Show "Referred By 介绍人" at checkout 在结账页显示</span></div>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><label class="toggle-sw"><input type="checkbox" id="refRequired" onchange="refToggle('required',this.checked)"><span class="slider"></span></label><span style="font-size:.84rem">Required — customer must choose 必选（顾客一定要选）</span></div>
+          <div class="card" style="box-shadow:none;border:1px solid var(--border);padding:12px"><h3>Names 名字选项 <span id="refCount" style="font-size:.78rem;color:var(--muted);font-weight:400"></span></h3>
+            <div id="refAdminList"></div>
+            <div style="display:flex;gap:7px;margin-top:10px"><input type="text" id="refNewName" maxlength="80" placeholder="New name 新名字 e.g. Amy" style="flex:1" onkeydown="if(event.key==='Enter')refAdd()"/><button class="save-btn" style="background:#2d6a4f;width:auto;margin:0" onclick="refAdd()">+ Add 添加</button></div>
+            <button class="save-btn" style="margin-top:10px" onclick="refSaveNames()">💾 Save Name Changes 保存改名</button>
+            <div class="msg" id="refMsg"></div>
+          </div>
+          <div class="card" style="box-shadow:none;border:1px solid var(--border);padding:12px;margin-top:10px"><h3>Orders by Referrer 介绍人业绩</h3>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;align-items:flex-end"><div class="fg2"><label>Date From</label><input type="date" id="refFrom" onchange="renderReferralStats()"/></div><div class="fg2"><label>Date To</label><input type="date" id="refTo" onchange="renderReferralStats()"/></div><button class="fbtn clear" onclick="document.getElementById('refFrom').value='';document.getElementById('refTo').value='';renderReferralStats()">All time 全部</button></div>
+            <p class="hint" style="margin-bottom:6px">Cancelled orders are not counted. 已取消的订单不计算。</p>
+            <div id="refStats"></div>
+          </div>
+        </div>
       </div>
       <!-- DISCOUNTS -->
       <div class="admin-section" id="tab-discounts">
@@ -960,6 +981,7 @@ const DEFAULT_CONFIG={
   faq:[],tc:'',discountEnabled:false,productLang:'both',
   popup:{enabled:false,img:'',title:'',titleCn:'',msg:'',msgCn:'',btnText:'Continue Shopping',btnTextCn:'继续购物',showOrder:true},
   pickupEnabled:true,
+  referral:{enabled:false,required:false,options:[]},
   shopClosed:{enabled:false,titleEn:'Group Buy Has Ended',titleCn:'团购已结束',msgEn:'Thank you for your support! The current group buy has ended. Please follow us for the next round.',msgCn:'感谢您的支持！本次团购已结束，敬请期待下一次团购活动。',img:''},
   orderPrefix:'TWDG#',orderDigits:5
 };
@@ -1196,10 +1218,11 @@ function afterPublicData(what){
   }
   // Live updates after boot
   if(what==='config'){applyBranding();renderSlideshow();renderFooter();applyShopClosed();renderProducts();
-    const cp=document.getElementById('page-checkout');if(cp&&cp.classList.contains('active')){renderBankSection();renderCheckoutSummary();}}
+    const cp=document.getElementById('page-checkout');if(cp&&cp.classList.contains('active')){renderBankSection();renderCheckoutSummary();renderReferralSection();}}
   else{renderProducts();}
   if(isAdminView()){
     if(what==='catalog'||what==='stock'){if(!document.querySelector('.prod-edit-panel.open'))renderProductList();else if(what==='stock'&&typeof epSyncStock==='function')epSyncStock();}
+    if(what==='config'){refFillFilter();const ae=document.activeElement;if(!(ae&&ae.closest&&ae.closest('#tab-referral')&&/INPUT|TEXTAREA/.test(ae.tagName)))renderReferralAdmin();}
   }
 }
 function bootError(e){
@@ -1265,7 +1288,7 @@ function refreshAdminViews(what){
       const ae=document.activeElement;
       if(ae&&ae.closest&&ae.closest('#ordersList')&&/INPUT|TEXTAREA|SELECT/.test(ae.tagName))_ordersDirty=true;else applyFilters();
     }
-    if(active==='tab-analytics')renderAnalytics();if(active==='tab-customers')renderCustomerList();}
+    if(active==='tab-analytics')renderAnalytics();if(active==='tab-customers')renderCustomerList();if(active==='tab-referral')renderReferralStats();refFillFilter();}
   if(what==='customers'&&active==='tab-customers')renderCustomerList();
   if(what==='messages'){const unread=S.contactMessages.filter(m=>!m.read).length;const tb=document.getElementById('tabbtn-messages');if(tb)tb.textContent='Messages'+(unread?` (${unread})`:'');if(active==='tab-messages'&&!document.querySelector('.conv-detail.open'))renderMessagesList();}
   if(what==='discounts'&&active==='tab-discounts')renderDiscountList();
@@ -1467,6 +1490,7 @@ function renderCheckoutPage(){
     <div id="delivery-fields"><div class="fg"><label>Postcode 邮编 <span class="req">*</span></label><div class="postcode-row"><input type="text" inputmode="numeric" id="custPostcode" maxlength="6" value="${esc(pf.postcode||'')}" oninput="this.value=this.value.replace(/\\D/g,'')"/><button class="detect-btn" onclick="detectRegion()">Detect</button></div><div class="errmsg" id="err-custPostcode">Detect region first</div><div id="regionResult"></div></div><div class="fg"><label>Address 地址 <span class="req">*</span></label><textarea id="custAddr" rows="3">${esc(pf.addr||'')}</textarea><div class="errmsg" id="err-custAddr">Required</div></div></div>
   </div>
   <div class="co-card"><h3>4. Remarks 备注</h3><div class="fg"><label>Special Instructions (optional)</label><textarea id="checkoutRemarks" rows="2" placeholder="e.g. Gift wrap...">${esc(window._cartRemarks||'')}</textarea></div></div>
+  <div id="refCardWrap"></div>
   ${S.discountEnabled?`<div class="co-card"><h3>5. Discount Code 折扣码</h3><div style="display:flex;gap:7px"><input type="text" id="discountInput" placeholder="Enter discount code..." style="flex:1;text-transform:uppercase" value="${esc(appliedDiscount?appliedDiscount.code:'')}"/><button class="detect-btn" id="discBtn" onclick="applyDiscount()">Apply 应用</button></div><div id="discountResult" style="margin-top:6px;font-size:.83rem"></div></div>`:''}
   <div class="co-card"><h3>${n1}. Payment Details 付款资料</h3><div id="bankSelWrap"></div></div>
   <div class="co-card"><h3>${n2}. Payment Proof 付款凭证</h3>
@@ -1477,7 +1501,7 @@ function renderCheckoutPage(){
   </div>
   <div class="confirm-check-row"><input type="checkbox" id="confirmCheck"/><label for="confirmCheck">I confirm all information is correct and agree to the Terms & Conditions. 我确认以上信息正确并同意条款。</label></div><div class="errmsg" id="err-confirmCheck" style="margin-top:4px">Please tick to confirm. 请勾选确认。</div>
   <button class="submit-btn" style="margin-top:12px" onclick="openConfirmModal()">Review & Submit 确认提交</button><div class="msg" id="submitMsg"></div>`;
-  renderBankSection();
+  renderBankSection();renderReferralSection();
   const puBtn=document.getElementById('tog-pickup');if(puBtn)puBtn.style.display=S.pickupEnabled===false?'none':'';
   if(S.pickupEnabled===false&&deliveryMode==='pickup')deliveryMode='delivery';
   setDelivery(deliveryMode);
@@ -1532,6 +1556,19 @@ async function applyDiscount(silent){
   }catch(e){appliedDiscount=null;res.innerHTML=`<span style="color:var(--pri)">❌ ${esc(fbErrText(e))}</span>`;}
   renderCheckoutSummary();
 }
+// ── "Referred by" (介绍人): names are managed in Admin → Referral ──
+function activeReferrers(){const r=S.referral||{};return r.enabled?(r.options||[]).filter(o=>o&&o.active!==false&&String(o.name||'').trim()):[];}
+function renderReferralSection(){
+  const w=document.getElementById('refCardWrap');if(!w)return;
+  const cur=document.getElementById('custReferrer');if(cur)window._refSel=cur.value;
+  const opts=activeReferrers();const req=!!(S.referral&&S.referral.required);
+  if(!opts.length){w.innerHTML='';renumberCheckout();return;}
+  const sel=window._refSel||'';
+  w.innerHTML=`<div class="co-card"><h3>5. Referred By 介绍人</h3><div class="fg"><label>Who referred you? 是谁介绍您来的？ ${req?'<span class="req">*</span>':'<span style="font-size:.78rem;color:var(--muted);font-weight:400">(optional 可不选)</span>'}</label><select id="custReferrer" onchange="window._refSel=this.value;setErr('custReferrer',false)"><option value="">— Please select 请选择 —</option>${opts.map(o=>`<option value="${esc(o.id)}" ${o.id===sel?'selected':''}>${esc(o.name)}</option>`).join('')}</select><div class="errmsg" id="err-custReferrer">Please select who referred you 请选择介绍人</div></div></div>`;
+  renumberCheckout();
+}
+function renumberCheckout(){let n=0;document.querySelectorAll('#checkoutWrap .co-card>h3').forEach(h=>{n++;h.textContent=h.textContent.replace(/^\d+\./,n+'.');});}
+function readReferrer(){const id=document.getElementById('custReferrer')?.value||'';const o=id&&activeReferrers().find(x=>x.id===id);return o?{referrerId:o.id,referrer:String(o.name).trim().slice(0,80)}:{referrerId:'',referrer:''};}
 function setErr(id,show){const i=document.getElementById(id);const m=document.getElementById('err-'+id);if(i)i.classList.toggle('err',show);if(m)m.classList.toggle('show',show);return show;}
 // ── Image compression (receipts: stays well under Firestore's 1MB doc limit) ──
 function fileToDataURL(f){return new Promise((res,rej)=>{const r=new FileReader();r.onload=e=>res(e.target.result);r.onerror=rej;r.readAsDataURL(f);});}
@@ -1550,7 +1587,7 @@ async function previewReceipt(e){
 }
 function readForm(){
   const v=id=>(document.getElementById(id)?.value||'').trim();
-  return {name:v('custName'),phone:v('custPhone'),email:v('custEmail'),postcode:deliveryMode==='delivery'?v('custPostcode'):'',addr:deliveryMode==='delivery'?v('custAddr'):'Store Pickup',custBank:v('custBank'),custBankHolder:v('custBankHolder'),ref:v('refNo'),remarks:document.getElementById('checkoutRemarks')?.value||window._cartRemarks||''};
+  return {name:v('custName'),phone:v('custPhone'),email:v('custEmail'),postcode:deliveryMode==='delivery'?v('custPostcode'):'',addr:deliveryMode==='delivery'?v('custAddr'):'Store Pickup',custBank:v('custBank'),custBankHolder:v('custBankHolder'),ref:v('refNo'),remarks:document.getElementById('checkoutRemarks')?.value||window._cartRemarks||'',...readReferrer()};
 }
 function openConfirmModal(){
   if(S.shopClosed&&S.shopClosed.enabled){alert(lang==='cn'?'本次团购已结束':'Group buy has ended.');return;}
@@ -1563,12 +1600,13 @@ function openConfirmModal(){
   if(setErr('custBank',!f.custBank))e=true;
   if(setErr('custBankHolder',!f.custBankHolder))e=true;
   if(setErr('refNo',!f.ref))e=true;
+  if(setErr('custReferrer',!!(S.referral&&S.referral.required)&&activeReferrers().length>0&&!f.referrer))e=true;
   const nr=!receiptBase64;document.getElementById('err-receipt').classList.toggle('show',nr);if(nr)e=true;
   document.getElementById('err-confirmCheck')?.classList.toggle('show',!checked);if(!checked)e=true;
   if(e){document.querySelector('.err,.errmsg.show')?.scrollIntoView?.({behavior:'smooth',block:'center'});return;}
   const t=currentTotals();
   if(!t.lines.length||t.lines.length!==cart.length){alert('Some items are no longer available. Please check your cart. 部分商品已下架，请检查购物车。');showPage('cart');return;}
-  document.getElementById('modalContent').innerHTML=`<div class="msec"><h4>Delivery</h4><p>${deliveryMode==='pickup'?'🏪 Store Pickup':'🚚 Delivery'}</p></div><div class="msec"><h4>Customer</h4><p>${esc(f.name)} | ${esc(f.phone)}</p><p>${esc(f.email)}</p>${deliveryMode==='delivery'?`<p>${esc(f.postcode)} ${esc(f.addr)} (${esc(detectedRegion)})</p>`:''}</div><div class="msec"><h4>Items</h4>${t.lines.map(i=>`<p>${esc(getProdName(i))}${i.variation?' ('+esc(i.variation)+')':''} × ${i.qty} = RM ${money(i.price*i.qty)}</p>`).join('')}</div>${f.remarks?`<div class="msec"><h4>Remarks</h4><p>${esc(f.remarks)}</p></div>`:''}<div class="msec"><h4>Payment Details</h4><p><b>Bank:</b> ${esc(f.custBank)}</p><p><b>Account Holder:</b> ${esc(f.custBankHolder)}</p><p><b>Ref No.:</b> ${esc(f.ref)}</p><img src="${receiptBase64}" style="max-width:100%;max-height:200px;border-radius:7px;margin-top:5px;border:1px solid var(--border);display:block"/></div><div class="msec"><h4>Total</h4><p>Sub: RM ${money(t.sub)} · Ship: RM ${money(t.fee)}${t.disc>0?' · Discount: −RM '+money(t.disc):''}</p><p style="font-weight:700;color:var(--pri)">Total: RM ${money(t.total)}</p></div><div id="submitStatus" style="display:none;margin-top:10px;padding:10px;border-radius:7px;font-size:.86rem"></div>`;
+  document.getElementById('modalContent').innerHTML=`<div class="msec"><h4>Delivery</h4><p>${deliveryMode==='pickup'?'🏪 Store Pickup':'🚚 Delivery'}</p></div><div class="msec"><h4>Customer</h4><p>${esc(f.name)} | ${esc(f.phone)}</p><p>${esc(f.email)}</p>${deliveryMode==='delivery'?`<p>${esc(f.postcode)} ${esc(f.addr)} (${esc(detectedRegion)})</p>`:''}</div><div class="msec"><h4>Items</h4>${t.lines.map(i=>`<p>${esc(getProdName(i))}${i.variation?' ('+esc(i.variation)+')':''} × ${i.qty} = RM ${money(i.price*i.qty)}</p>`).join('')}</div>${f.remarks?`<div class="msec"><h4>Remarks</h4><p>${esc(f.remarks)}</p></div>`:''}${f.referrer?`<div class="msec"><h4>Referred By 介绍人</h4><p>${esc(f.referrer)}</p></div>`:''}<div class="msec"><h4>Payment Details</h4><p><b>Bank:</b> ${esc(f.custBank)}</p><p><b>Account Holder:</b> ${esc(f.custBankHolder)}</p><p><b>Ref No.:</b> ${esc(f.ref)}</p><img src="${receiptBase64}" style="max-width:100%;max-height:200px;border-radius:7px;margin-top:5px;border:1px solid var(--border);display:block"/></div><div class="msec"><h4>Total</h4><p>Sub: RM ${money(t.sub)} · Ship: RM ${money(t.fee)}${t.disc>0?' · Discount: −RM '+money(t.disc):''}</p><p style="font-weight:700;color:var(--pri)">Total: RM ${money(t.total)}</p></div><div id="submitStatus" style="display:none;margin-top:10px;padding:10px;border-radius:7px;font-size:.86rem"></div>`;
   _confirmTotal=t.total; // the exact amount the customer is agreeing to
   const btn=document.getElementById('confirmSubmitBtn');btn.disabled=false;btn.textContent='Confirm & Submit ✅ 确认提交';
   document.querySelector('#confirmModal .mbtn-cancel').disabled=false;
@@ -1643,7 +1681,7 @@ async function placeOrderTx(d){
     const order={key:d.key,no,id,status:'pending',tracking:'',label:'',isNew:true,hasReceipt:true,
       name:d.name,phone:d.phone,email:d.email,accountEmail:normEmail(d.email),postcode:d.postcode,addr:d.addr,
       region:d.deliveryMode==='pickup'?'Pickup':d.region,deliveryMode:d.deliveryMode,
-      custBank:d.custBank,custBankHolder:d.custBankHolder,ref:d.ref,remarks:d.remarks,
+      custBank:d.custBank,custBankHolder:d.custBankHolder,ref:d.ref,remarks:d.remarks,referrer:String(d.referrer||'').slice(0,80),referrerId:String(d.referrerId||'').slice(0,40),
       items,stockItems:items.map(i=>({id:i.id,nameEn:i.nameEn,variation:i.variation,qty:i.qty})),subtotal:sub,shipping:fee,discount:disc,discountCode:d.discountCode||'',total,
       date:d.date,dateRaw:d.dateRaw,createdAt:FB.serverTimestamp()};
     const lookupId=await sha256(id+'|'+digits(d.phone));
@@ -1754,7 +1792,7 @@ async function submitOrder(){
 function onOrderSuccess(order){
   lsDel('twdg_pending');_orderKey=null;
   const keys=lsGet('twdg_orders',[]);if(!keys.includes(order.key))keys.unshift(order.key);lsSet('twdg_orders',keys.slice(0,50));
-  cart=[];saveCart();receiptBase64='';appliedDiscount=null;window._cartRemarks='';
+  cart=[];saveCart();receiptBase64='';appliedDiscount=null;window._cartRemarks='';window._refSel='';
   document.getElementById('confirmModal').classList.remove('show');
   const wrap=document.getElementById('checkoutWrap');
   wrap.innerHTML=`<div class="co-card" style="text-align:center;padding:30px 20px"><div style="font-size:3rem">✅</div><h2 style="color:#2d6a4f;margin:8px 0">Order Placed! 下单成功！</h2><p style="font-size:.9rem;color:var(--muted);margin-bottom:14px">Your order has been saved in our system. 您的订单已保存到系统。</p><div style="background:#f0f7ff;border-radius:10px;padding:14px;display:inline-block;min-width:240px"><div style="font-size:.78rem;color:var(--muted)">Order Number 订单号码</div><div style="font-size:1.5rem;font-weight:800;color:var(--sec)">${esc(order.id)}</div><div style="font-weight:700;color:var(--pri);margin-top:4px">RM ${money(order.total)}</div></div><p style="font-size:.8rem;color:var(--muted);margin-top:14px">请截图保存订单号码。Please screenshot your order number.<br>查看订单 / Track: 👤 My Account</p><div style="display:flex;gap:8px;justify-content:center;margin-top:14px;flex-wrap:wrap"><button class="save-btn" onclick="showPage('account')">👤 My Orders 我的订单</button><button class="save-btn" style="background:#2d6a4f" onclick="showPage('shop')">Continue Shopping 继续购物</button></div></div>`;
@@ -1838,7 +1876,7 @@ function viewOrderDetail(key){
   const o=_acOrders.find(x=>x._key===key);if(!o)return;const modal=document.getElementById('orderDetailModal');if(!modal)return;
   document.getElementById('orderDetailContent').innerHTML=`
     <div style="background:#f8f9fa;border-radius:8px;padding:12px;margin-bottom:12px"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px"><div><div style="font-size:.78rem;color:var(--muted)">Order Number</div><div style="font-weight:800;font-size:1.05rem;color:var(--sec)">${esc(o.id)}</div></div><span class="spill s-${o.status}">${slabel(o.status)}</span></div><div style="font-size:.82rem;color:var(--muted);margin-top:4px">📅 ${esc(o.date)}</div></div>
-    <div style="margin-bottom:12px;background:#f0f7ff;border-radius:8px;padding:12px"><div style="font-weight:700;font-size:.85rem;color:var(--sec);margin-bottom:8px">👤 CUSTOMER 顾客信息</div><div style="font-size:.86rem;display:flex;flex-direction:column;gap:4px"><div><b>Name:</b> ${esc(o.name)}</div><div><b>Email:</b> ${esc(o.email||'—')}</div><div><b>Phone:</b> ${esc(o.phone||'—')}</div><div><b>Delivery:</b> ${o.deliveryMode==='pickup'?'🏪 Store Pickup':'🚚 '+esc(o.postcode||'')+' '+esc(o.addr||'')+(o.region&&o.region!=='Pickup'?' ('+esc(o.region)+')':'')}</div>${o.remarks?`<div><b>Remarks:</b> ${esc(o.remarks)}</div>`:''}</div></div>
+    <div style="margin-bottom:12px;background:#f0f7ff;border-radius:8px;padding:12px"><div style="font-weight:700;font-size:.85rem;color:var(--sec);margin-bottom:8px">👤 CUSTOMER 顾客信息</div><div style="font-size:.86rem;display:flex;flex-direction:column;gap:4px"><div><b>Name:</b> ${esc(o.name)}</div><div><b>Email:</b> ${esc(o.email||'—')}</div><div><b>Phone:</b> ${esc(o.phone||'—')}</div><div><b>Delivery:</b> ${o.deliveryMode==='pickup'?'🏪 Store Pickup':'🚚 '+esc(o.postcode||'')+' '+esc(o.addr||'')+(o.region&&o.region!=='Pickup'?' ('+esc(o.region)+')':'')}</div>${o.remarks?`<div><b>Remarks:</b> ${esc(o.remarks)}</div>`:''}${o.referrer?`<div><b>Referred By 介绍人:</b> ${esc(refName(o))}</div>`:''}</div></div>
     <div style="margin-bottom:12px"><div style="font-weight:700;font-size:.85rem;color:var(--sec);margin-bottom:6px">ITEMS ORDERED</div>${o.items.map(i=>`<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border);font-size:.86rem"><div><b>${esc(getProdName(i))}</b>${i.variation?`<br><span style="color:var(--muted);font-size:.78rem">Variant: ${esc(i.variation)}</span>`:''}<br><span style="color:var(--muted);font-size:.78rem">Qty: ${i.qty}</span></div><div style="text-align:right;font-weight:700">RM ${money(i.price*i.qty)}</div></div>`).join('')}</div>
     <div style="background:#f8f9fa;border-radius:8px;padding:12px;margin-bottom:12px"><div style="font-weight:700;font-size:.85rem;color:var(--sec);margin-bottom:8px">PAYMENT SUMMARY</div><div style="display:flex;justify-content:space-between;font-size:.86rem;padding:3px 0"><span>Subtotal</span><span>RM ${money(o.subtotal)}</span></div><div style="display:flex;justify-content:space-between;font-size:.86rem;padding:3px 0"><span>Shipping</span><span>RM ${money(o.shipping)}</span></div>${o.discount>0?`<div style="display:flex;justify-content:space-between;font-size:.86rem;padding:3px 0;color:#0f5132"><span>Discount</span><span>−RM ${money(o.discount)}</span></div>`:''}<div style="display:flex;justify-content:space-between;font-size:1rem;font-weight:800;padding:8px 0 3px;border-top:2px solid var(--border);margin-top:5px;color:var(--pri)"><span>Total</span><span>RM ${money(o.total)}</span></div></div>
     <div style="background:#fff8e1;border:1px solid #ffe082;border-radius:8px;padding:12px;margin-bottom:12px"><div style="font-weight:700;font-size:.85rem;color:#b8860b;margin-bottom:8px">💳 PAYMENT PROOF 付款凭证</div><div style="font-size:.86rem;display:flex;flex-direction:column;gap:4px"><div><b>Bank:</b> ${esc(o.custBank||'—')}</div><div><b>Account Holder:</b> ${esc(o.custBankHolder||'—')}</div><div><b>Ref No.:</b> ${esc(o.ref||'—')}</div><div><b>Receipt 收据:</b> ${o.hasReceipt?'✅ Received 已收到':'—'}</div></div></div>
@@ -1895,7 +1933,7 @@ function showAdminPanel(){
   document.getElementById('adminWho').textContent=ADMIN.user?ADMIN.user.email:'';const w2=document.getElementById('adminWho2');if(w2)w2.textContent=ADMIN.user?ADMIN.user.email:'';
   ensureConfigDoc();
   renderProductList();renderShippingForm();renderBankAdmin();loadAdminInputs();loadPopupAdminInputs();renderColorSwatches();renderFaqAdmin();renderSlideEditorList();
-  loadTcInput();renderDiscountList();
+  loadTcInput();renderDiscountList();renderReferralAdmin();
   applyFilters();renderCustomerList();renderMessagesList();
 }
 function hideAdminPanel(){window._adminLoggedIn=false;const lw=document.getElementById('adminLoginWrap');if(lw)lw.style.display='';const ap=document.getElementById('adminPanel');if(ap)ap.style.display='none';}
@@ -1912,7 +1950,7 @@ function adminTab(t,btn){document.querySelectorAll('.admin-section').forEach(x=>
   if(t==='orders')applyFilters();if(t==='products')renderProductList();if(t==='shipping')renderShippingForm();if(t==='customers')renderCustomerList();if(t==='messages')renderMessagesList();if(t==='analytics'){applyAnRangePreset();}if(t==='bank')renderBankAdmin();
   if(t==='footer'){renderFaqAdmin();loadAdminInputs();loadTcInput();}
   if(t==='branding'){loadAdminInputs();renderColorSwatches();renderSlideEditorList();}
-  if(t==='discounts')renderDiscountList();if(t==='popup')loadPopupAdminInputs();if(t==='settings'){loadAdminInputs();loadGithubInputs();}}
+  if(t==='discounts')renderDiscountList();if(t==='referral')renderReferralAdmin();if(t==='popup')loadPopupAdminInputs();if(t==='settings'){loadAdminInputs();loadGithubInputs();}}
 
 // ── Image upload → GitHub repo (served by GitHub Pages, free & does not use Firebase quota) ──
 function ghBaseUrl(g){if(g.baseUrl)return g.baseUrl.replace(/\/+$/,'');const o=g.owner,r=g.repo;return r.toLowerCase()===(o+'.github.io').toLowerCase()?`https://${r.toLowerCase()}`:`https://${o.toLowerCase()}.github.io/${r}`;}
@@ -2126,10 +2164,11 @@ function setStatusFilter(status,btn){_statusFilter=status;document.querySelector
 function filteredOrders(){
   const g=id=>(document.getElementById(id)?.value||'');
   const fP=g('fProduct').toLowerCase(),fN=g('fName').toLowerCase(),fPh=g('fPhone').toLowerCase(),fE=g('fEmail').toLowerCase(),fNo=g('fOrderNo').toLowerCase();
-  const fDF=g('fDateFrom'),fDT=g('fDateTo');const fMn=parseFloat(g('fMinT'))||0,fMx=parseFloat(g('fMaxT'))||Infinity;const sort=g('fSort')||'id-desc';
+  const fDF=g('fDateFrom'),fDT=g('fDateTo');const fMn=parseFloat(g('fMinT'))||0,fMx=parseFloat(g('fMaxT'))||Infinity;const sort=g('fSort')||'id-desc';const fRef=g('fReferrer');
   let orders=S.orders.filter(o=>{
     if(fNo&&!String(o.id).toLowerCase().includes(fNo))return false;
     if(fP&&!o.items.some(i=>((i.nameEn||'')+' '+(i.nameCn||'')+' '+(i.variation||'')).toLowerCase().includes(fP)))return false;
+    if(fRef&&(fRef==='__none'?!!o.referrer:refKey(o)!==fRef))return false;
     if(fN&&!(o.name||'').toLowerCase().includes(fN))return false;if(fPh&&!(o.phone||'').toLowerCase().includes(fPh))return false;if(fE&&!(o.email||'').toLowerCase().includes(fE))return false;
     const d=new Date(o.dateRaw);if(fDF&&d<new Date(fDF))return false;if(fDT&&d>new Date(fDT+'T23:59:59'))return false;if(o.total<fMn||o.total>fMx)return false;
     if(_statusFilter==='archived'||_statusFilter==='cancelled'){if(o.status!==_statusFilter)return false;}else{if(o.status==='archived'||o.status==='cancelled')return false;if(_statusFilter!=='all'&&o.status!==_statusFilter)return false;}
@@ -2145,7 +2184,7 @@ function applyFilters(){
   ss.className='search-summary show';ss.innerHTML=`📊 Showing <b>${orders.length}</b> of ${S.orders.length} orders · Total: <b>RM ${money(tot)}</b> · 🟢 Live sync 实时同步`;
   renderOrdersFromList(orders);
 }
-function clearFilters(){['fOrderNo','fProduct','fName','fPhone','fEmail','fDateFrom','fDateTo','fMinT','fMaxT'].forEach(id=>{const e=document.getElementById(id);if(e)e.value='';});document.getElementById('fSort').value='id-desc';_statusFilter='all';document.querySelectorAll('.status-pill').forEach(p=>p.classList.remove('active'));document.getElementById('spill-all')?.classList.add('active');applyFilters();}
+function clearFilters(){['fOrderNo','fProduct','fName','fPhone','fEmail','fReferrer','fDateFrom','fDateTo','fMinT','fMaxT'].forEach(id=>{const e=document.getElementById(id);if(e)e.value='';});document.getElementById('fSort').value='id-desc';_statusFilter='all';document.querySelectorAll('.status-pill').forEach(p=>p.classList.remove('active'));document.getElementById('spill-all')?.classList.add('active');applyFilters();}
 function renderOrdersList(){applyFilters();}
 function renderOrdersFromList(orders){
   const el=document.getElementById('ordersList');
@@ -2160,7 +2199,7 @@ function renderOrdersFromList(orders){
       <p><b>Customer:</b> ${esc(o.name)} | ${esc(o.phone)} | ${esc(o.email)}</p>
       <p><b>${o.deliveryMode==='pickup'?'Pickup':'Address'}:</b> ${esc(o.postcode||'')} ${esc(o.addr)}${o.region&&o.region!=='Pickup'?' ('+esc(o.region)+')':''}</p>
       <p><b>Items:</b> ${o.items.map(i=>`${esc(i.nameEn)}${i.variation?' ('+esc(i.variation)+')':''} x${i.qty} @ RM${money(i.price)}`).join(', ')}</p>
-      ${o.remarks?`<p><b>Remarks:</b> ${esc(o.remarks)}</p>`:''}
+      ${o.remarks?`<p><b>Remarks:</b> ${esc(o.remarks)}</p>`:''}${o.referrer?`<p><b>Referred By 介绍人:</b> ${esc(refName(o))}</p>`:''}
       <p><b>Sub:</b> RM ${money(o.subtotal)} · <b>Ship:</b> RM ${money(o.shipping)}${o.discount>0?` · <b>Disc:</b> −RM ${money(o.discount)} (${esc(o.discountCode)})`:''} · <b>Total:</b> RM ${money(o.total)}</p>
       <p><b>Bank:</b> ${esc(o.custBank||'—')} · <b>Holder:</b> ${esc(o.custBankHolder||'—')} · <b>Ref:</b> ${esc(o.ref||'—')}</p>${tb}
       <div id="rc-${o._key}" style="margin-top:4px"><button class="edit-btn" style="background:#6c757d" onclick="loadReceiptInto('${o._key}','rc-${o._key}')">🧾 Show receipt 查看收据</button></div>
@@ -2256,6 +2295,7 @@ function adminViewOrder(key){
     <div style="margin-bottom:12px"><b style="font-size:.85rem;color:var(--sec)">PAYMENT</b><div class="fr3" style="margin-top:7px"><div class="fg"><label>Bank Used</label><input type="text" id="eo-bank" value="${esc(o.custBank||'')}"/></div><div class="fg"><label>Account Holder Name</label><input type="text" id="eo-bankholder" value="${esc(o.custBankHolder||'')}"/></div><div class="fg"><label>Reference No.</label><input type="text" id="eo-ref" value="${esc(o.ref||'')}"/></div></div>
       <p style="font-size:.82rem;font-weight:600;color:var(--muted);margin:6px 0">Payment Receipt 付款收据</p><div id="eo-receipt"></div></div>
     <div class="fg"><label>Remarks</label><textarea id="eo-remarks" rows="2">${esc(o.remarks||'')}</textarea></div>
+    <div class="fg"><label>Referred By 介绍人</label><select id="eo-referrer">${refEditOptions(o)}</select></div>
     <div class="msg" id="eo-msg"></div>
     <div style="display:flex;gap:8px;margin-top:12px"><button class="save-btn" style="flex:1" onclick="adminSaveOrder('${key}')">💾 Save Changes</button><button class="fbtn clear" onclick="closeOrderModal()">Cancel</button></div>`;
   document.getElementById('adminOrderModal').classList.add('show');
@@ -2271,7 +2311,7 @@ function eoCollect(o){
   const items=[];document.querySelectorAll('#eo-items-wrap [id^="eo-item-"]').forEach(div=>{if(div.dataset.removed)return;const ii=div.id.replace('eo-item-','');const name=v('eo-iname-'+ii).trim();if(!name)return;const old=o.items[parseInt(ii)]||{};items.push({...old,id:div.dataset.pid||old.id||'',nameEn:name,nameCn:div.dataset.cn||old.nameCn||name,variation:v('eo-ivar-'+ii).trim(),price:parseFloat(v('eo-iprice-'+ii))||0,qty:parseInt(v('eo-iqty-'+ii))||1});});
   if(!items.length)return{error:'Order must have at least 1 item.'};
   const shipping=parseFloat(v('eo-ship'));const sub=Math.round(items.reduce((a,i)=>a+i.price*i.qty,0)*100)/100;const ship=isNaN(shipping)?o.shipping:shipping;
-  const f={status:v('eo-status'),label:v('eo-label').trim(),tracking:v('eo-tracking').trim(),name:v('eo-name').trim()||o.name,phone:v('eo-phone').trim()||o.phone,email:v('eo-email').trim()||o.email,deliveryMode:v('eo-mode'),region:v('eo-region'),postcode:v('eo-postcode').trim(),addr:v('eo-addr').trim()||o.addr,shipping:ship,custBank:v('eo-bank').trim(),custBankHolder:v('eo-bankholder').trim(),ref:v('eo-ref').trim(),remarks:v('eo-remarks'),items,subtotal:sub,total:Math.round(Math.max(0,sub+ship-(o.discount||0))*100)/100};
+  const f={status:v('eo-status'),label:v('eo-label').trim(),tracking:v('eo-tracking').trim(),name:v('eo-name').trim()||o.name,phone:v('eo-phone').trim()||o.phone,email:v('eo-email').trim()||o.email,deliveryMode:v('eo-mode'),region:v('eo-region'),postcode:v('eo-postcode').trim(),addr:v('eo-addr').trim()||o.addr,shipping:ship,custBank:v('eo-bank').trim(),custBankHolder:v('eo-bankholder').trim(),ref:v('eo-ref').trim(),remarks:v('eo-remarks'),...refFromEdit(o,v('eo-referrer')),items,subtotal:sub,total:Math.round(Math.max(0,sub+ship-(o.discount||0))*100)/100};
   f.accountEmail=normEmail(f.email);
   return{f};
 }
@@ -2448,7 +2488,7 @@ async function exportExcel(ev){
       if(!had)delete _receiptCache[o._key];   // don't keep hundreds of full-size receipts in memory
       receipts[o._key]=src;n++;if(btn)btn.textContent=`⏳ ${n}/${orders.length}`;}));}}
     const wb=new ExcelJS.Workbook();const ws=wb.addWorksheet('Orders');
-    ws.columns=[{header:'Order No.',key:'id',width:14},{header:'Date',key:'date',width:22},{header:'Status',key:'status',width:14},{header:'Delivery',key:'delivery',width:10},{header:'Tracking',key:'tracking',width:18},{header:'Customer',key:'customer',width:20},{header:'Phone',key:'phone',width:14},{header:'Email',key:'email',width:26},{header:'Postcode',key:'postcode',width:10},{header:'Address',key:'addr',width:30},{header:'Region',key:'region',width:18},{header:'Remarks',key:'remarks',width:20},{header:'Product',key:'product',width:26},{header:'Variant',key:'variant',width:14},{header:'Unit Price (RM)',key:'unitprice',width:14},{header:'Qty',key:'qty',width:6},{header:'Item Total (RM)',key:'itemtotal',width:14},{header:'Subtotal (RM)',key:'subtotal',width:13},{header:'Shipping (RM)',key:'shipping',width:13},{header:'Discount (RM)',key:'discount',width:13},{header:'Order Total (RM)',key:'total',width:15},{header:'Bank',key:'bank',width:14},{header:'Bank Holder Name',key:'bankHolder',width:22},{header:'Bank Ref No.',key:'ref',width:16},{header:'Label',key:'label',width:12},{header:'Receipt',key:'receipt',width:47}];
+    ws.columns=[{header:'Order No.',key:'id',width:14},{header:'Date',key:'date',width:22},{header:'Status',key:'status',width:14},{header:'Delivery',key:'delivery',width:10},{header:'Tracking',key:'tracking',width:18},{header:'Customer',key:'customer',width:20},{header:'Phone',key:'phone',width:14},{header:'Email',key:'email',width:26},{header:'Postcode',key:'postcode',width:10},{header:'Address',key:'addr',width:30},{header:'Region',key:'region',width:18},{header:'Remarks',key:'remarks',width:20},{header:'Referred By 介绍人',key:'referrer',width:18},{header:'Product',key:'product',width:26},{header:'Variant',key:'variant',width:14},{header:'Unit Price (RM)',key:'unitprice',width:14},{header:'Qty',key:'qty',width:6},{header:'Item Total (RM)',key:'itemtotal',width:14},{header:'Subtotal (RM)',key:'subtotal',width:13},{header:'Shipping (RM)',key:'shipping',width:13},{header:'Discount (RM)',key:'discount',width:13},{header:'Order Total (RM)',key:'total',width:15},{header:'Bank',key:'bank',width:14},{header:'Bank Holder Name',key:'bankHolder',width:22},{header:'Bank Ref No.',key:'ref',width:16},{header:'Label',key:'label',width:12},{header:'Receipt',key:'receipt',width:47}];
     const hdr=ws.getRow(1);hdr.font={bold:true,color:{argb:'FFFFFFFF'}};hdr.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF457B9D'}};hdr.alignment={vertical:'middle',horizontal:'center'};hdr.height=20;
     const recCol=ws.columns.length-1;
     // Receipt picture size: fit inside the cell (up to 320×520 px, readable without opening it) keeping the photo's proportions.
@@ -2457,7 +2497,7 @@ async function exportExcel(ev){
     await Promise.all(Object.entries(receipts).map(([k,src])=>src?new Promise(r=>{const im=new Image();im.onload=()=>{dims[k]=[im.naturalWidth,im.naturalHeight];r();};im.onerror=()=>r();im.src=src;}):null));
     const fit=k=>{const [w,h]=dims[k]||[4,3];const s=Math.min(320/w,520/h,1);return {width:Math.round(w*s),height:Math.round(h*s)};};
     [...orders].sort((a,b)=>a.no-b.no).forEach(o=>{o.items.forEach((it,idx)=>{
-      const ct=tsToDate(o.createdAt);const row=ws.addRow({id:o.id,date:ct?ct.toLocaleString('en-GB',{timeZone:'Asia/Kuala_Lumpur'}):o.date,status:slabel(o.status),delivery:o.deliveryMode==='pickup'?'Pickup':'Delivery',tracking:o.tracking||'',customer:o.name,phone:o.phone,email:o.email,postcode:o.postcode||'',addr:o.addr,region:o.region||'',remarks:o.remarks||'',product:it.nameEn||'',variant:it.variation||'',unitprice:+money(it.price),qty:it.qty,itemtotal:+money(it.price*it.qty),subtotal:idx===0?+money(o.subtotal):'',shipping:idx===0?+money(o.shipping):'',discount:idx===0?+money(o.discount):'',total:idx===0?+money(o.total):'',bank:o.custBank||'',bankHolder:o.custBankHolder||'',ref:o.ref||'',label:o.label||'',receipt:''});
+      const ct=tsToDate(o.createdAt);const row=ws.addRow({id:o.id,date:ct?ct.toLocaleString('en-GB',{timeZone:'Asia/Kuala_Lumpur'}):o.date,status:slabel(o.status),delivery:o.deliveryMode==='pickup'?'Pickup':'Delivery',tracking:o.tracking||'',customer:o.name,phone:o.phone,email:o.email,postcode:o.postcode||'',addr:o.addr,region:o.region||'',remarks:o.remarks||'',referrer:refName(o),product:it.nameEn||'',variant:it.variation||'',unitprice:+money(it.price),qty:it.qty,itemtotal:+money(it.price*it.qty),subtotal:idx===0?+money(o.subtotal):'',shipping:idx===0?+money(o.shipping):'',discount:idx===0?+money(o.discount):'',total:idx===0?+money(o.total):'',bank:o.custBank||'',bankHolder:o.custBankHolder||'',ref:o.ref||'',label:o.label||'',receipt:''});
       row.alignment={vertical:'middle',wrapText:true};
       const rc=receipts[o._key];
       if(idx===0&&rc){const m=rc.match(/^data:image\/(png|jpeg|jpg);base64,(.+)$/i);if(m){row.height=Math.min(409,Math.round(fit(o._key).height*0.75)+8);const id=wb.addImage({base64:m[2],extension:m[1].toLowerCase()==='png'?'png':'jpeg'});ws.addImage(id,{tl:{col:recCol+0.05,row:row.number-1+0.05},ext:fit(o._key),editAs:'oneCell'});}}
@@ -2577,6 +2617,60 @@ function previewPopupFromInputs(){const saved=S.popup;S.popup=popupFromInputs();
 if(window.FB)boot();else window.addEventListener('fb-ready',boot,{once:true});
 // If the Firebase library itself can't be downloaded, don't leave a blank page — explain and offer reload.
 setTimeout(()=>{if(!window.FB){const el=document.getElementById('fb-loading');if(el){el.style.display='flex';el.innerHTML='<div style="text-align:center;padding:20px;max-width:420px"><div style="font-size:2rem">⚠️</div><div style="font-weight:700;margin:8px 0">无法连接服务器 Unable to load</div><div style="font-size:.85rem;color:#555;margin-bottom:14px">网络不稳定，请检查网络后重新载入。Please check your connection and reload.</div><button onclick="location.reload()" style="background:#457b9d;color:#fff;border:none;padding:10px 22px;border-radius:8px;font-weight:700;cursor:pointer">🔄 重新载入 Reload</button></div>';}}},20000);
+
+// ═══ Referral 介绍人 ═══
+// Names live in config.referral.options [{id,name,active}]. Orders keep a copy of the name chosen
+// (order.referrer) plus its id (order.referrerId), so renaming later keeps old orders grouped together.
+let _refDraft=null;
+function refName(o){if(!o||!o.referrer)return '';const x=o.referrerId&&((S.referral&&S.referral.options)||[]).find(r=>r.id===o.referrerId);return x&&x.name?x.name:o.referrer;}
+function refKey(o){return o.referrerId||('name:'+String(o.referrer||'').trim().toLowerCase());}
+function refRead(){if(!_refDraft)return;_refDraft.options.forEach((o,i)=>{const el=document.getElementById('refName-'+i);if(el)o.name=el.value.trim().slice(0,80);});}
+function renderReferralAdmin(){
+  const box=document.getElementById('refAdminList');if(!box)return;
+  _refDraft=JSON.parse(JSON.stringify(cfgShape('referral',S.referral)));if(!Array.isArray(_refDraft.options))_refDraft.options=[];
+  cfgSnap('referral');_cfgRender.referral=renderReferralAdmin;
+  const ck=(id,v)=>{const e=document.getElementById(id);if(e)e.checked=!!v;};ck('refEnabled',_refDraft.enabled);ck('refRequired',_refDraft.required);
+  const n=_refDraft.options.length,act=_refDraft.options.filter(o=>o.active!==false).length;
+  const rc=document.getElementById('refCount');if(rc)rc.textContent=`(${act} shown / ${n} total 显示${act}个 / 共${n}个)`;
+  box.innerHTML=n?_refDraft.options.map((o,i)=>`<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap"><span style="width:22px;color:var(--muted);font-size:.8rem">${i+1}.</span><input type="text" id="refName-${i}" value="${esc(o.name)}" maxlength="80" style="flex:1;min-width:120px"/><label class="toggle-sw" title="Show to customers 显示给顾客"><input type="checkbox" ${o.active!==false?'checked':''} onchange="refSetActive(${i},this.checked)"><span class="slider"></span></label><span style="font-size:.72rem;width:44px;color:${o.active!==false?'#0f5132':'var(--muted)'}">${o.active!==false?'Shown':'Hidden'}</span><button class="fbtn clear" style="padding:4px 8px" ${i===0?'disabled':''} onclick="refMove(${i},-1)">↑</button><button class="fbtn clear" style="padding:4px 8px" ${i===n-1?'disabled':''} onclick="refMove(${i},1)">↓</button><button class="fbtn clear" style="padding:4px 8px;color:#c1121f" onclick="refDel(${i})">✕</button></div>`).join(''):'<div class="empty" style="padding:10px">No names yet. Add below. 还没有名字，请在下面添加。</div>';
+  if(!_refDraft.enabled&&n)box.insertAdjacentHTML('afterbegin','<div style="background:#fff3cd;border-radius:6px;padding:6px 10px;font-size:.8rem;margin-bottom:8px">⚠️ Turned off — customers do not see this yet. 目前关闭，顾客看不到。</div>');
+  else if(_refDraft.enabled&&!act)box.insertAdjacentHTML('afterbegin','<div style="background:#fff3cd;border-radius:6px;padding:6px 10px;font-size:.8rem;margin-bottom:8px">⚠️ No names shown — the option is hidden at checkout until you add or show a name. 没有可选名字，结账页暂时不会显示。</div>');
+  refFillFilter();renderReferralStats();
+}
+async function refCommit(okText){const ok=await saveConfig({referral:_refDraft},'refMsg',okText||'✅ Saved 已保存');setTimeout(renderReferralAdmin,ok?300:2600);return ok;}
+async function refToggle(k,v){refRead();_refDraft[k]=v;await refCommit(k==='enabled'?(v?'✅ Shown at checkout 已在结账页显示':'✅ Hidden from checkout 已隐藏'):(v?'✅ Now required 已设为必选':'✅ Now optional 已设为可不选'));}
+async function refAdd(){const inp=document.getElementById('refNewName');const name=(inp?.value||'').trim().slice(0,80);if(!name){showMsg('refMsg','error','Please type a name 请输入名字');return;}
+  refRead();if(_refDraft.options.some(o=>o.name.trim().toLowerCase()===name.toLowerCase())){showMsg('refMsg','error','This name already exists 名字已存在');return;}
+  _refDraft.options.push({id:'r'+Date.now().toString(36)+Math.random().toString(36).slice(2,6),name,active:true});inp.value='';await refCommit('✅ Added 已添加: '+name);}
+async function refSaveNames(){refRead();const names=_refDraft.options.map(o=>o.name.toLowerCase());
+  if(names.some(x=>!x)){showMsg('refMsg','error','A name is empty 有名字是空的');return;}
+  if(new Set(names).size!==names.length){showMsg('refMsg','error','Two names are the same 有重复的名字');return;}
+  await refCommit('✅ Names saved 名字已保存');}
+async function refSetActive(i,v){refRead();_refDraft.options[i].active=v;await refCommit(v?'✅ Shown 已显示':'✅ Hidden 已隐藏');}
+async function refMove(i,d){refRead();const a=_refDraft.options,j=i+d;if(j<0||j>=a.length)return;[a[i],a[j]]=[a[j],a[i]];await refCommit('✅ Order saved 顺序已保存');}
+async function refDel(i){const o=_refDraft.options[i];if(!confirm(`Delete "${o.name}"? Old orders keep this name. 删除？旧订单会保留这个名字。`))return;refRead();_refDraft.options.splice(i,1);await refCommit('✅ Deleted 已删除');}
+function refEditOptions(o){const opts=(S.referral&&S.referral.options)||[];const has=o.referrerId&&opts.some(x=>x.id===o.referrerId);
+  let h=`<option value="">— None 没有 —</option>`;
+  if(o.referrer&&!has)h+=`<option value="__keep" selected>${esc(o.referrer)} (not in list 已不在名单)</option>`;
+  return h+opts.map(x=>`<option value="${esc(x.id)}" ${has&&x.id===o.referrerId?'selected':''}>${esc(x.name)}${x.active===false?' (hidden)':''}</option>`).join('');}
+function refFromEdit(o,val){if(val==='__keep')return{referrer:o.referrer||'',referrerId:o.referrerId||''};if(!val)return{referrer:'',referrerId:''};const x=((S.referral&&S.referral.options)||[]).find(r=>r.id===val);return x?{referrer:x.name,referrerId:x.id}:{referrer:o.referrer||'',referrerId:o.referrerId||''};}
+function refGroups(orders){const opts=(S.referral&&S.referral.options)||[];const g={};
+  orders.forEach(o=>{if(!o.referrer)return;const k=refKey(o);const cur=opts.find(x=>x.id===o.referrerId);if(!g[k])g[k]={key:k,name:cur?cur.name:o.referrer,orders:0,rev:0,goods:0,units:0};
+    const r=g[k];r.orders++;r.rev+=+o.total||0;r.goods+=(o.items||[]).reduce((a,i)=>a+i.price*i.qty,0);r.units+=(o.items||[]).reduce((a,i)=>a+(+i.qty||0),0);});
+  return Object.values(g).sort((a,b)=>b.rev-a.rev||a.name.localeCompare(b.name));}
+function refFillFilter(){const sel=document.getElementById('fReferrer');if(!sel)return;const cur=sel.value;const gs=refGroups(S.orders);const opts=(S.referral&&S.referral.options)||[];
+  const items=[...gs.map(g=>[g.key,g.name])];opts.forEach(x=>{if(!items.some(i=>i[0]===x.id))items.push([x.id,x.name]);});
+  const html=`<option value="">All</option><option value="__none">No referrer 没有介绍人</option>`+items.map(([k,n])=>`<option value="${esc(k)}">${esc(n)}</option>`).join('');
+  if(sel.innerHTML!==html){sel.innerHTML=html;sel.value=items.some(i=>i[0]===cur)||cur==='__none'?cur:'';}}
+function renderReferralStats(){const el=document.getElementById('refStats');if(!el)return;
+  const from=document.getElementById('refFrom')?.value||'',to=document.getElementById('refTo')?.value||'';
+  const orders=S.orders.filter(o=>o.status!=='cancelled').filter(o=>{const d=orderTime(o);if(from&&d<new Date(from))return false;if(to&&d>new Date(to+'T23:59:59'))return false;return true;});
+  const gs=refGroups(orders);const none=orders.filter(o=>!o.referrer);const tot=k=>gs.reduce((a,g)=>a+g[k],0);
+  if(!orders.length){el.innerHTML='<div class="empty" style="padding:12px">No orders in this period. 这段时间没有订单。</div>';return;}
+  el.innerHTML=`<div style="overflow-x:auto"><table class="an-table"><thead><tr><th>Referrer 介绍人</th><th>Orders 订单</th><th>Units 件数</th><th>Products RM 商品额</th><th>Order Total RM 订单总额</th><th></th></tr></thead><tbody>${gs.map(g=>`<tr><td><b>${esc(g.name)}</b></td><td>${g.orders}</td><td>${g.units}</td><td>RM ${money(g.goods)}</td><td style="font-weight:700;color:var(--pri)">RM ${money(g.rev)}</td><td><button class="fbtn clear" style="padding:3px 8px" onclick="refShowOrders('${esc(g.key)}')">View 查看</button></td></tr>`).join('')}
+  <tr style="background:#f6f7f9"><td><b>Total with referrer 有介绍人合计</b></td><td><b>${tot('orders')}</b></td><td><b>${tot('units')}</b></td><td><b>RM ${money(tot('goods'))}</b></td><td><b>RM ${money(tot('rev'))}</b></td><td></td></tr>
+  <tr><td style="color:var(--muted)">No referrer 没有介绍人</td><td>${none.length}</td><td>${none.reduce((a,o)=>a+(o.items||[]).reduce((b,i)=>b+(+i.qty||0),0),0)}</td><td>RM ${money(none.reduce((a,o)=>a+(o.items||[]).reduce((b,i)=>b+i.price*i.qty,0),0))}</td><td>RM ${money(none.reduce((a,o)=>a+(+o.total||0),0))}</td><td><button class="fbtn clear" style="padding:3px 8px" onclick="refShowOrders('__none')">View 查看</button></td></tr></tbody></table></div><p class="hint" style="margin-top:6px">Products RM = items only (no shipping, before discount). Order Total = what the customer paid. 商品额=只算商品（不含运费、未扣折扣）；订单总额=顾客实付。</p>`;}
+function refShowOrders(k){clearFilters();refFillFilter();const sel=document.getElementById('fReferrer');if(sel)sel.value=k;const b=document.getElementById('tabbtn-orders');if(b)adminTab('orders',b);}
 
 </script>
 </body>
