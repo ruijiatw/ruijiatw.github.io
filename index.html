@@ -1383,7 +1383,7 @@ function openProdModal(pid){
   const imgWrap=document.getElementById('pdm-imgWrap');
   imgWrap.innerHTML=isImg(mainImg)?`<div class="prod-modal-img-wrap"><img src="${esc(IS(mainImg))}" class="prod-modal-img" id="pdm-mainImg" alt=""/></div>`:`<div class="prod-modal-img-emoji"><span>${esc(mainImg)}</span></div>`;
   const thumbsEl=document.getElementById('pdm-thumbs');
-  if(validImgs.length>1){thumbsEl.style.display='flex';thumbsEl.innerHTML=validImgs.map((img,ii)=>`<img src="${esc(IS(img.url))}" class="prod-modal-thumb${img.selected?' active':''}" onclick="pdmSwitchImg('${p.id}',${ii})" alt=""/>`).join('');}
+  if(validImgs.length>1){thumbsEl.style.display='flex';thumbsEl.innerHTML=validImgs.map((img,ii)=>`<img src="${esc(IS(img.url))}" loading="lazy" decoding="async" class="prod-modal-thumb${img.selected?' active':''}" onclick="pdmSwitchImg('${p.id}',${ii})" alt=""/>`).join('');}
   else{thumbsEl.style.display='none';thumbsEl.innerHTML='';}
   document.getElementById('pdm-name').textContent=getProdName(p);
   document.getElementById('pdm-price').textContent=dispPrice(p);
@@ -1404,7 +1404,9 @@ function pdmChQ(d){_pdmQty=Math.max(1,_pdmQty+d);document.getElementById('pdm-qt
 function pdmAddCart(){const sel=document.getElementById('pdm-var');const vn=sel&&sel.style.display!=='none'?sel.value:'';if(addToCart(_pdmId,vn,_pdmQty))closeProdModal();}
 document.addEventListener('click',function(e){const ov=document.getElementById('prodDetailModal');if(ov&&e.target===ov)closeProdModal();});
 document.addEventListener('keydown',function(e){if(e.key==='Escape')closeProdModal();});
-function buildThumbStrip(p){const validImgs=(p.images||[]).filter(i=>isImg(i.url));if(validImgs.length<=1)return '';return`<div style="display:flex;gap:4px;margin-bottom:7px;flex-wrap:wrap">${validImgs.map((img,ii)=>`<img src="${esc(IS(img.url))}" onclick="switchProdImg('${p.id}',${ii})" style="width:36px;height:36px;object-fit:cover;border-radius:4px;cursor:pointer;border:2px solid ${img.selected?'var(--pri)':'var(--border)'}" id="pthumb-${p.id}-${ii}"/>`).join('')}</div>`;}
+// Card shows at most 4 small pictures (lazy-loaded); the rest are a "+N" tile that opens the product, where every picture is shown.
+const CARD_THUMBS=4;
+function buildThumbStrip(p){const validImgs=(p.images||[]).filter(i=>isImg(i.url));if(validImgs.length<=1)return '';const shown=validImgs.slice(0,CARD_THUMBS),more=validImgs.length-shown.length;return`<div style="display:flex;gap:4px;margin-bottom:7px;flex-wrap:wrap">${shown.map((img,ii)=>`<img src="${esc(IS(img.url))}" loading="lazy" decoding="async" onclick="switchProdImg('${p.id}',${ii})" style="width:36px;height:36px;object-fit:cover;border-radius:4px;cursor:pointer;border:2px solid ${img.selected?'var(--pri)':'var(--border)'}" id="pthumb-${p.id}-${ii}" alt=""/>`).join('')}${more>0?`<button type="button" onclick="openProdModal('${p.id}')" title="View all ${validImgs.length} photos 查看全部图片" style="width:36px;height:36px;border-radius:4px;border:2px solid var(--border);background:#f1f3f5;color:var(--text);font-size:.78rem;font-weight:700;cursor:pointer;padding:0">+${more}</button>`:''}</div>`;}
 function truncateDesc(desc,limit=50){const words=desc.trim().split(/\s+/);if(words.length<=limit)return{text:desc,truncated:false};return{text:words.slice(0,limit).join(' ')+'…',truncated:true};}
 function renderProducts(){
   const g=document.getElementById('productsGrid');if(!g)return;
