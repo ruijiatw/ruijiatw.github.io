@@ -344,9 +344,21 @@ footer{background:#1d3557;color:#fff;padding:36px 18px 18px;margin-top:auto}
 /* Product detail modal */
 .prod-modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:550;align-items:flex-start;justify-content:center;padding:12px;overflow-y:auto}
 .prod-modal-overlay.show{display:flex}
-.prod-modal-box{background:var(--card);border-radius:14px;max-width:520px;width:100%;margin:auto;box-shadow:0 10px 40px rgba(0,0,0,.25);overflow:hidden;position:relative}
-.prod-modal-img-wrap{width:100%;aspect-ratio:1/1;overflow:hidden;background:#f8f8f8;display:block;position:relative}
-.prod-modal-img{width:100%;height:100%;object-fit:contain;display:block}
+.prod-modal-box{background:var(--card);border-radius:14px;max-width:680px;width:100%;margin:auto;box-shadow:0 10px 40px rgba(0,0,0,.25);overflow:hidden;position:relative}
+.prod-modal-img-wrap{width:100%;min-height:200px;background:#f8f8f8;display:block;position:relative;cursor:zoom-in}
+.prod-modal-img{width:100%;height:auto;display:block}
+.pdm-zoom-hint{position:absolute;right:10px;bottom:10px;background:rgba(0,0,0,.6);color:#fff;font-size:.74rem;padding:4px 9px;border-radius:14px;pointer-events:none}
+/* Full-screen photo viewer */
+.imgv{display:none;position:fixed;inset:0;background:rgba(0,0,0,.94);z-index:900;overflow:auto;-webkit-overflow-scrolling:touch}
+.imgv.show{display:block}
+.imgv-stage{min-height:100%;display:flex;align-items:flex-start;justify-content:center;padding:52px 0 70px}
+.imgv-stage img{display:block;width:auto;max-width:100%;height:auto;cursor:zoom-in;background:#fff}
+.imgv.zoom .imgv-stage{justify-content:flex-start}
+.imgv.zoom .imgv-stage img{max-width:none;width:200%;cursor:zoom-out}
+.imgv-bar{position:fixed;left:0;right:0;top:0;display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:linear-gradient(rgba(0,0,0,.7),transparent);color:#fff;z-index:2;font-size:.85rem}
+.imgv-btn{background:rgba(255,255,255,.18);color:#fff;border:none;border-radius:20px;min-width:40px;height:40px;font-size:1.05rem;cursor:pointer;padding:0 12px}
+.imgv-nav{position:fixed;top:50%;transform:translateY(-50%);z-index:2;width:44px;height:64px;border-radius:8px;font-size:1.6rem}
+.imgv-prev{left:6px}.imgv-next{right:6px}
 .prod-modal-img-emoji{width:100%;aspect-ratio:1/1;display:flex;align-items:center;justify-content:center;font-size:5rem;background:#f0f0f0}
 .prod-modal-body{padding:20px}
 .prod-modal-close{position:absolute;top:12px;right:14px;background:rgba(0,0,0,.45);border:none;color:#fff;width:32px;height:32px;border-radius:50%;cursor:pointer;font-size:1.1rem;display:flex;align-items:center;justify-content:center;z-index:10}
@@ -917,6 +929,13 @@ html,body{overflow-x:hidden;max-width:100vw}
   </div>
   <div class="footer-bottom" id="footerBottom">© 2025 My Shop</div>
 </footer>
+<!-- FULL-SCREEN PHOTO VIEWER -->
+<div class="imgv" id="imgViewer" onclick="if(event.target===this||event.target.classList.contains('imgv-stage'))imgvClose()">
+  <div class="imgv-bar"><span id="imgvCount"></span><span style="display:flex;gap:6px"><button class="imgv-btn" onclick="imgvToggleZoom()" title="Zoom 放大">🔍</button><button class="imgv-btn" onclick="imgvClose()" title="Close 关闭">✕</button></span></div>
+  <button class="imgv-btn imgv-nav imgv-prev" id="imgvPrev" onclick="imgvGo(-1)">‹</button>
+  <button class="imgv-btn imgv-nav imgv-next" id="imgvNext" onclick="imgvGo(1)">›</button>
+  <div class="imgv-stage"><img id="imgvImg" alt="" onclick="imgvToggleZoom()"/></div>
+</div>
 <!-- PRODUCT DETAIL MODAL -->
 <div class="prod-modal-overlay" id="prodDetailModal">
   <div class="prod-modal-box">
@@ -1381,9 +1400,9 @@ function openProdModal(pid){
   const validImgs=(p.images||[]).filter(i=>isImg(i.url));
   const mainImg=getProdMainImg(p);
   const imgWrap=document.getElementById('pdm-imgWrap');
-  imgWrap.innerHTML=isImg(mainImg)?`<div class="prod-modal-img-wrap"><img src="${esc(IS(mainImg))}" class="prod-modal-img" id="pdm-mainImg" alt=""/></div>`:`<div class="prod-modal-img-emoji"><span>${esc(mainImg)}</span></div>`;
+  imgWrap.innerHTML=isImg(mainImg)?`<div class="prod-modal-img-wrap" onclick="imgvOpenFromModal()"><img src="${esc(IS(mainImg))}" class="prod-modal-img" id="pdm-mainImg" alt=""/><span class="pdm-zoom-hint">🔍 ${lang==='en'?'Tap to enlarge':'点击放大'}</span></div>`:`<div class="prod-modal-img-emoji"><span>${esc(mainImg)}</span></div>`;
   const thumbsEl=document.getElementById('pdm-thumbs');
-  if(validImgs.length>1){thumbsEl.style.display='flex';thumbsEl.innerHTML=validImgs.map((img,ii)=>`<img src="${esc(IS(img.url))}" loading="lazy" decoding="async" class="prod-modal-thumb${img.selected?' active':''}" onclick="pdmSwitchImg('${p.id}',${ii})" alt=""/>`).join('');}
+  if(validImgs.length>1){thumbsEl.style.display='flex';thumbsEl.innerHTML=validImgs.map((img,ii)=>`<img src="${esc(IS(img.thumb||img.url))}" loading="lazy" decoding="async" class="prod-modal-thumb${img.selected?' active':''}" onclick="pdmSwitchImg('${p.id}',${ii})" alt=""/>`).join('');}
   else{thumbsEl.style.display='none';thumbsEl.innerHTML='';}
   document.getElementById('pdm-name').textContent=getProdName(p);
   document.getElementById('pdm-price').textContent=dispPrice(p);
@@ -1397,6 +1416,17 @@ function openProdModal(pid){
   btn.textContent=so?'Sold Out 已售罄':(lang==='en'?'Add to Cart 加入购物车':'加入购物车');btn.disabled=so;btn.style.background=so?'#adb5bd':'';
   document.getElementById('prodDetailModal').classList.add('show');document.body.style.overflow='hidden';
 }
+// ── Full-screen photo viewer (tap a product photo; ‹ › or swipe for next; 🔍 or tap photo to zoom; pinch also works on phones) ──
+let _imgv={list:[],i:0};
+function imgvOpen(list,i){if(!list.length)return;_imgv={list,i:Math.max(0,Math.min(i,list.length-1))};const v=document.getElementById('imgViewer');v.classList.remove('zoom');v.classList.add('show');document.body.style.overflow='hidden';imgvShow();}
+function imgvShow(){const{list,i}=_imgv;const im=document.getElementById('imgvImg');im.src=IS(list[i]);document.getElementById('imgvCount').textContent=list.length>1?`${i+1} / ${list.length}`:'';const one=list.length<2;document.getElementById('imgvPrev').style.display=one?'none':'';document.getElementById('imgvNext').style.display=one?'none':'';const v=document.getElementById('imgViewer');v.classList.remove('zoom');v.scrollTo(0,0);}
+function imgvGo(d){const n=_imgv.list.length;if(n<2)return;_imgv.i=(_imgv.i+d+n)%n;imgvShow();}
+function imgvToggleZoom(){const v=document.getElementById('imgViewer');v.classList.toggle('zoom');if(!v.classList.contains('zoom'))v.scrollTo(0,0);}
+function imgvClose(){document.getElementById('imgViewer').classList.remove('show');document.body.style.overflow=document.getElementById('prodDetailModal').classList.contains('show')?'hidden':'';}
+function imgvOpenFromModal(){const p=S.products.find(x=>x.id===_pdmId);if(!p)return;const list=(p.images||[]).filter(i=>isImg(i.url)).map(i=>i.url);const cur=document.getElementById('pdm-mainImg')?.getAttribute('src')||'';let i=list.findIndex(u=>IS(u)===cur||u===cur);if(i<0){if(cur)list.unshift(cur);i=0;}imgvOpen(list,i);}
+(function(){let x0=null,y0=0;document.addEventListener('touchstart',e=>{const v=document.getElementById('imgViewer');if(!v||!v.classList.contains('show')||v.classList.contains('zoom')||e.touches.length>1){x0=null;return;}x0=e.touches[0].clientX;y0=e.touches[0].clientY;},{passive:true});
+document.addEventListener('touchend',e=>{if(x0==null)return;const t=e.changedTouches[0];const dx=t.clientX-x0,dy=t.clientY-y0;x0=null;if(Math.abs(dx)>60&&Math.abs(dx)>Math.abs(dy)*1.5)imgvGo(dx<0?1:-1);},{passive:true});
+document.addEventListener('keydown',e=>{const v=document.getElementById('imgViewer');if(!v||!v.classList.contains('show'))return;if(e.key==='ArrowRight')imgvGo(1);else if(e.key==='ArrowLeft')imgvGo(-1);else if(e.key==='Escape'){e.stopImmediatePropagation();imgvClose();}},true);})();
 function closeProdModal(){document.getElementById('prodDetailModal').classList.remove('show');document.body.style.overflow='';}
 function pdmSwitchImg(pid,ii){const p=S.products.find(x=>x.id===pid);if(!p)return;const validImgs=(p.images||[]).filter(i=>isImg(i.url));if(!validImgs[ii])return;const main=document.getElementById('pdm-mainImg');if(main)main.src=IS(validImgs[ii].url);document.querySelectorAll('.prod-modal-thumb').forEach((t,i)=>t.classList.toggle('active',i===ii));}
 function pdmUpdVar(){const p=S.products.find(x=>x.id===_pdmId);if(!p)return;const sel=document.getElementById('pdm-var');const v=(p.variants||[]).find(x=>x.name===sel.value);document.getElementById('pdm-price').textContent=v?`RM ${money(v.price)}`:dispPrice(p);if(v&&isImg(v.img)){const main=document.getElementById('pdm-mainImg');if(main)main.src=IS(v.img);}}
@@ -1406,7 +1436,7 @@ document.addEventListener('click',function(e){const ov=document.getElementById('
 document.addEventListener('keydown',function(e){if(e.key==='Escape')closeProdModal();});
 // Card shows at most 4 small pictures (lazy-loaded); the rest are a "+N" tile that opens the product, where every picture is shown.
 const CARD_THUMBS=4;
-function buildThumbStrip(p){const validImgs=(p.images||[]).filter(i=>isImg(i.url));if(validImgs.length<=1)return '';const shown=validImgs.slice(0,CARD_THUMBS),more=validImgs.length-shown.length;return`<div style="display:flex;gap:4px;margin-bottom:7px;flex-wrap:wrap">${shown.map((img,ii)=>`<img src="${esc(IS(img.url))}" loading="lazy" decoding="async" onclick="switchProdImg('${p.id}',${ii})" style="width:36px;height:36px;object-fit:cover;border-radius:4px;cursor:pointer;border:2px solid ${img.selected?'var(--pri)':'var(--border)'}" id="pthumb-${p.id}-${ii}" alt=""/>`).join('')}${more>0?`<button type="button" onclick="openProdModal('${p.id}')" title="View all ${validImgs.length} photos 查看全部图片" style="width:36px;height:36px;border-radius:4px;border:2px solid var(--border);background:#f1f3f5;color:var(--text);font-size:.78rem;font-weight:700;cursor:pointer;padding:0">+${more}</button>`:''}</div>`;}
+function buildThumbStrip(p){const validImgs=(p.images||[]).filter(i=>isImg(i.url));if(validImgs.length<=1)return '';const shown=validImgs.slice(0,CARD_THUMBS),more=validImgs.length-shown.length;return`<div style="display:flex;gap:4px;margin-bottom:7px;flex-wrap:wrap">${shown.map((img,ii)=>`<img src="${esc(IS(img.thumb||img.url))}" loading="lazy" decoding="async" onclick="switchProdImg('${p.id}',${ii})" style="width:36px;height:36px;object-fit:cover;border-radius:4px;cursor:pointer;border:2px solid ${img.selected?'var(--pri)':'var(--border)'}" id="pthumb-${p.id}-${ii}" alt=""/>`).join('')}${more>0?`<button type="button" onclick="openProdModal('${p.id}')" title="View all ${validImgs.length} photos 查看全部图片" style="width:36px;height:36px;border-radius:4px;border:2px solid var(--border);background:#f1f3f5;color:var(--text);font-size:.78rem;font-weight:700;cursor:pointer;padding:0">+${more}</button>`:''}</div>`;}
 function truncateDesc(desc,limit=50){const words=desc.trim().split(/\s+/);if(words.length<=limit)return{text:desc,truncated:false};return{text:words.slice(0,limit).join(' ')+'…',truncated:true};}
 function renderProducts(){
   const g=document.getElementById('productsGrid');if(!g)return;
@@ -1415,7 +1445,7 @@ function renderProducts(){
   g.innerHTML=visible.map(p=>{
     const so=isSoldOut(p);
     const mainImg=getProdMainImg(p);
-    const ih=isImg(mainImg)?`<img src="${esc(IS(mainImg))}" alt="" loading="lazy"/>`:`<span>${esc(mainImg)}</span>`;
+    const ih=isImg(mainImg)?`<img src="${esc(IS(imgThumb(p,mainImg)))}" alt="" loading="lazy"/>`:`<span>${esc(mainImg)}</span>`;
     const activeVars=(p.variants||[]).filter(v=>v.active!==false);
     const desc=getProdDesc(p);const shipsTo=(p.shipsTo&&p.shipsTo.length)?p.shipsTo:REGIONS;
     let descHtml='';
@@ -1436,7 +1466,7 @@ function renderProducts(){
       </div></div>`;
   }).join('');
 }
-function switchProdImg(pid,ii){const p=S.products.find(x=>x.id===pid);if(!p||!p.images)return;const validImgs=p.images.filter(i=>isImg(i.url));if(!validImgs[ii])return;const imgEl=document.getElementById('pimg-'+pid);if(imgEl)imgEl.innerHTML=`<img src="${esc(IS(validImgs[ii].url))}" alt=""/>`;validImgs.forEach((_,i)=>{const th=document.getElementById(`pthumb-${pid}-${i}`);if(th)th.style.border=`2px solid ${i===ii?'var(--pri)':'var(--border)'}`;});}
+function switchProdImg(pid,ii){const p=S.products.find(x=>x.id===pid);if(!p||!p.images)return;const validImgs=p.images.filter(i=>isImg(i.url));if(!validImgs[ii])return;const imgEl=document.getElementById('pimg-'+pid);if(imgEl)imgEl.innerHTML=`<img src="${esc(IS(validImgs[ii].thumb||validImgs[ii].url))}" alt=""/>`;validImgs.forEach((_,i)=>{const th=document.getElementById(`pthumb-${pid}-${i}`);if(th)th.style.border=`2px solid ${i===ii?'var(--pri)':'var(--border)'}`;});}
 function updVP(id){const p=S.products.find(x=>x.id===id);const s=document.getElementById('var-'+id);const v=(p.variants||[]).find(x=>x.name===s.value);document.getElementById('pd-'+id).textContent=v?`RM ${money(v.price)}`:dispPrice(p);if(v&&isImg(v.img)){const imgEl=document.getElementById('pimg-'+id);if(imgEl)imgEl.innerHTML=`<img src="${esc(IS(v.img))}" alt=""/>`;}}
 const QM={};
 function chQ(id,d){QM[id]=Math.max(1,(QM[id]||1)+d);const el=document.getElementById('qty-'+id);if(el)el.textContent=QM[id];}
@@ -1574,8 +1604,9 @@ function readReferrer(){const id=document.getElementById('custReferrer')?.value|
 function setErr(id,show){const i=document.getElementById(id);const m=document.getElementById('err-'+id);if(i)i.classList.toggle('err',show);if(m)m.classList.toggle('show',show);return show;}
 // ── Image compression (receipts: stays well under Firestore's 1MB doc limit) ──
 function fileToDataURL(f){return new Promise((res,rej)=>{const r=new FileReader();r.onload=e=>res(e.target.result);r.onerror=rej;r.readAsDataURL(f);});}
-function compressDataURL(src,maxDim=1400,maxBytes=650000,mime='image/jpeg'){
-  return new Promise((res,rej)=>{const img=new Image();img.onload=()=>{let w=img.naturalWidth,h=img.naturalHeight;const sc=Math.min(1,maxDim/Math.max(w,h));w=Math.round(w*sc);h=Math.round(h*sc);const cv=document.createElement('canvas');let q=.85,out='';for(let i=0;i<12;i++){cv.width=w;cv.height=h;const ctx=cv.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(0,0,w,h);ctx.drawImage(img,0,0,w,h);out=cv.toDataURL(mime,q);if(out.length<=maxBytes)break;if(q>.5)q-=.1;else{w=Math.round(w*.8);h=Math.round(h*.8);}}res(out);};img.onerror=()=>rej(new Error('Not a valid image 不是有效图片'));img.src=src;});
+// opt (product photos): {maxW,maxH,q0,qMin} — limit width/height separately and keep quality high.
+function compressDataURL(src,maxDim=1400,maxBytes=650000,mime='image/jpeg',opt){
+  return new Promise((res,rej)=>{const img=new Image();img.onload=()=>{let w=img.naturalWidth,h=img.naturalHeight;const sc=opt?Math.min(1,opt.maxW/w,opt.maxH/h):Math.min(1,maxDim/Math.max(w,h));w=Math.round(w*sc);h=Math.round(h*sc);const cv=document.createElement('canvas');const qMin=opt?opt.qMin:.5;let q=opt?opt.q0:.85,out='';for(let i=0;i<14;i++){cv.width=w;cv.height=h;const ctx=cv.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(0,0,w,h);ctx.drawImage(img,0,0,w,h);out=cv.toDataURL(mime,q);if(out.length<=maxBytes)break;if(q>qMin+.001)q=Math.max(qMin,q-.05);else{w=Math.round(w*.85);h=Math.round(h*.85);}}res(out);};img.onerror=()=>rej(new Error('Not a valid image 不是有效图片'));img.src=src;});
 }
 async function previewReceipt(e){
   const f=e.target.files[0];if(!f)return;
@@ -1961,9 +1992,19 @@ async function uploadImageFile(file,folder='img',maxDim=1400){
   if(!g||!g.token||!g.owner||!g.repo)throw new Error('请先到 Settings → 🖼 Image Hosting 设置 GitHub，或直接贴图片网址 (URL)。Set up image hosting first, or paste an image URL.');
   if(!file.type.startsWith('image/'))throw new Error('Not an image 不是图片');
   const isPng=file.type==='image/png'&&folder!=='img';
-  const data=await compressDataURL(await fileToDataURL(file),maxDim,isPng?900000:450000,isPng?'image/png':'image/jpeg');
+  // Product photos: up to 1600px wide and 9000px tall (long infographics stay sharp), JPEG quality 92→80, up to ~2MB.
+  const data=folder==='img'?await compressDataURL(await fileToDataURL(file),0,2800000,'image/jpeg',{maxW:1600,maxH:9000,q0:.92,qMin:.8})
+    :await compressDataURL(await fileToDataURL(file),maxDim,isPng?900000:450000,isPng?'image/png':'image/jpeg');
   const ext=data.startsWith('data:image/png')?'png':'jpg';
   const path=`${folder}/${new Date().toISOString().slice(0,7)}/${Date.now().toString(36)}${randKey(5)}.${ext}`;
+  const url=await ghPutFile(g,path,data);PREVIEW[url]=data;
+  // Product photos also get a small copy (600px) for the shop cards and thumbnails, so the shop page stays fast.
+  if(folder==='img'){try{const sm=await compressDataURL(data,600,150000,'image/jpeg');const tu=await ghPutFile(g,path.replace(/\.(jpg|png)$/,'_s.jpg'),sm);PREVIEW[tu]=sm;THUMB[url]=tu;}catch(e){console.warn('thumb',e);}}
+  return url;
+}
+const THUMB={};
+function imgThumb(p,url){const i=((p&&p.images)||[]).find(x=>x.url===url);return (i&&i.thumb)||url;}
+async function ghPutFile(g,path,data){
   const body={message:'Upload '+path,content:data.split(',')[1],branch:g.branch||'main'};
   let res;
   for(let a=1;a<=3;a++){
@@ -1971,7 +2012,7 @@ async function uploadImageFile(file,folder='img',maxDim=1400){
     if(res.ok)break;if(res.status!==409&&res.status<500)break;await new Promise(r=>setTimeout(r,1500*a));
   }
   if(!res.ok){let t='';try{t=(await res.json()).message||'';}catch(e){}throw new Error(`GitHub upload failed (${res.status}) ${t}. 请检查 Settings 的 GitHub token 权限。`);}
-  const url=ghBaseUrl(g)+'/'+path;PREVIEW[url]=data;return url;
+  return ghBaseUrl(g)+'/'+path;
 }
 async function uploadMany(files,folder,onEach,errors){const urls=[];let n=0;for(const f of files){try{urls.push(await uploadImageFile(f,folder));}catch(e){if(!errors)throw e;errors.push((f.name||'image')+': '+e.message);}n++;onEach&&onEach(n,files.length);}return urls;}
 function loadGithubInputs(){const g=ADMIN.github||{};const sv=(id,v)=>{const el=document.getElementById(id);if(el)el.value=v||'';};sv('ghOwner',g.owner);sv('ghRepo',g.repo);sv('ghBranch',g.branch||'main');sv('ghBase',g.baseUrl);const t=document.getElementById('ghToken');if(t){t.value='';t.placeholder=g.token?'•••••••• (saved 已保存 — leave blank to keep)':'github_pat_…';}const st=document.getElementById('ghStatus');if(st)st.textContent=g.token?`✅ Configured: ${g.owner}/${g.repo} → ${ghBaseUrl(g)}`:'⚠️ Not configured — image uploads disabled (URL paste still works)';}
@@ -2006,7 +2047,7 @@ async function addProduct(){
   }
 }
 const _epShown={};
-function epThumbs(p){const imgs=p.images||[];_epShown[p.id]=imgs.map(i=>i.url);return imgs.map((img,ii)=>`<div style="position:relative;display:inline-block;margin-right:4px" title="Click to set as primary 点击设为主图"><img src="${esc(IS(img.url))}" onclick="epSetPrimary('${p.id}',${ii})" style="width:52px;height:52px;object-fit:cover;border-radius:5px;border:2px solid ${img.selected?'var(--pri)':'var(--border)'};cursor:pointer;background:#f0f0f0" onerror="this.style.opacity=.35;this.title='Publishing… 发布中 (~1 min)'"/><button onclick="epRemoveImg('${p.id}',${ii})" style="position:absolute;top:-5px;right:-5px;width:16px;height:16px;background:var(--pri);color:#fff;border:none;border-radius:50%;cursor:pointer;font-size:.65rem;display:flex;align-items:center;justify-content:center">✕</button>${img.selected?'<span style="position:absolute;bottom:-2px;left:0;right:0;text-align:center;font-size:.5rem;background:var(--pri);color:#fff;border-radius:0 0 4px 4px">★</span>':''}</div>`).join('')||'<span class="hint">No images yet 暂无图片</span>';}
+function epThumbs(p){const imgs=p.images||[];_epShown[p.id]=imgs.map(i=>i.url);const n=imgs.length;return (n>1?`<div class="hint" style="width:100%;margin-bottom:2px">Click a photo = set as main ★ · ◀ ▶ or drag to change order 点图设为主图 · 用 ◀ ▶ 或拖动调整顺序</div>`:'')+imgs.map((img,ii)=>`<div style="position:relative;display:inline-flex;flex-direction:column;align-items:center;margin-right:4px" draggable="true" ondragstart="epDragStart(event,'${p.id}',${ii})" ondragover="event.preventDefault()" ondrop="epDrop(event,'${p.id}',${ii})" title="Click to set as primary 点击设为主图"><span style="font-size:.6rem;color:var(--muted);line-height:1.2">${ii+1}</span><img src="${esc(IS(img.thumb||img.url))}" onclick="epSetPrimary('${p.id}',${ii})" style="width:52px;height:52px;object-fit:cover;border-radius:5px;border:2px solid ${img.selected?'var(--pri)':'var(--border)'};cursor:pointer;background:#f0f0f0" onerror="this.style.opacity=.35;this.title='Publishing… 发布中 (~1 min)'"/><button onclick="epRemoveImg('${p.id}',${ii})" style="position:absolute;top:6px;right:-5px;width:16px;height:16px;background:var(--pri);color:#fff;border:none;border-radius:50%;cursor:pointer;font-size:.65rem;display:flex;align-items:center;justify-content:center">✕</button>${img.selected?'<span style="position:absolute;top:52px;left:2px;font-size:.6rem;background:var(--pri);color:#fff;border-radius:3px;padding:0 3px">★</span>':''}${n>1?`<span style="display:flex;gap:2px;margin-top:2px"><button onclick="epMoveImg('${p.id}',${ii},-1)" ${ii===0?'disabled':''} title="Move left 往前" style="width:25px;height:22px;border:1px solid var(--border);background:#fff;border-radius:4px;cursor:pointer;font-size:.6rem;padding:0;${ii===0?'opacity:.3':''}">◀</button><button onclick="epMoveImg('${p.id}',${ii},1)" ${ii===n-1?'disabled':''} title="Move right 往后" style="width:25px;height:22px;border:1px solid var(--border);background:#fff;border-radius:4px;cursor:pointer;font-size:.6rem;padding:0;${ii===n-1?'opacity:.3':''}">▶</button></span>`:''}</div>`).join('')||'<span class="hint">No images yet 暂无图片</span>';}
 const _epBase={};   // product as shown in its edit form (what the admin started from)
 function renderProductList(keepOpen){
   const el=document.getElementById('productList');if(!el)return;
@@ -2113,13 +2154,19 @@ async function epUploadImgs(pid,e){
   try{
     showMsg('ep-imgmsg-'+pid,'success',`⏳ Uploading 0/${files.length}…`,true);
     const urls=await uploadMany(files,'img',(n,t)=>showMsg('ep-imgmsg-'+pid,'success',`⏳ Uploading ${n}/${t}…`,true),errs);
-    if(urls.length){const ok=await saveProductImages(pid,imgs=>urls.forEach(u=>imgs.push({url:u,selected:false})),`✅ ${urls.length} image(s) uploaded & saved 已上传保存`);if(!ok)return;}
+    if(urls.length){const ok=await saveProductImages(pid,imgs=>urls.forEach(u=>imgs.push(THUMB[u]?{url:u,thumb:THUMB[u],selected:false}:{url:u,selected:false})),`✅ ${urls.length} image(s) uploaded & saved 已上传保存`);if(!ok)return;}
     if(errs.length)showMsg('ep-imgmsg-'+pid,'error',`❌ ${errs.length}/${files.length} 张上传失败（${urls.length} 张已保存）: `+errs.join(' | '),true);
   }catch(err){showMsg('ep-imgmsg-'+pid,'error','❌ '+err.message,true);}
 }
 async function epAddImgUrl(pid){const inp=document.getElementById('ep-imgurl-'+pid);const url=(inp?.value||'').trim();if(!isImg(url)){showMsg('ep-imgmsg-'+pid,'error','Paste a full https:// image URL 请贴完整图片网址');return;}if(await saveProductImages(pid,imgs=>{if(!imgs.some(x=>x.url===url))imgs.push({url,selected:false});}))inp.value='';}
 const epImgUrl=(pid,ii)=>(_epShown[pid]||[])[ii];
 function epSetPrimary(pid,ii){const u=epImgUrl(pid,ii);saveProductImages(pid,imgs=>{const j=imgs.findIndex(x=>x.url===u);if(j<0)return;const sel=imgs.splice(j,1)[0];imgs.forEach(i=>i.selected=false);imgs.unshift({...sel,selected:true});});}
+// Move by URL (not position), so a change another admin just saved is never overwritten by mistake.
+function epMoveTo(pid,u,target){if(!u)return;saveProductImages(pid,imgs=>{const j=imgs.findIndex(x=>x.url===u);if(j<0)return;const it=imgs.splice(j,1)[0];let k=target?imgs.findIndex(x=>x.url===target.url):-1;if(k<0)k=imgs.length;else if(target.after)k++;imgs.splice(k,0,it);},'✅ Order saved 顺序已保存');}
+function epMoveImg(pid,ii,d){const sh=_epShown[pid]||[];const u=sh[ii],v=sh[ii+d];if(!u||!v)return;epMoveTo(pid,u,{url:v,after:d>0});}
+let _epDrag=null;
+function epDragStart(e,pid,ii){_epDrag={pid,ii};try{e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',String(ii));}catch(_){}}
+function epDrop(e,pid,ii){e.preventDefault();const d=_epDrag;_epDrag=null;if(!d||d.pid!==pid||d.ii===ii)return;const sh=_epShown[pid]||[];epMoveTo(pid,sh[d.ii],{url:sh[ii],after:d.ii<ii});}
 function epRemoveImg(pid,ii){if(!confirm('Remove this image? 移除此图片？'))return;const u=epImgUrl(pid,ii);saveProductImages(pid,imgs=>{const j=imgs.findIndex(x=>x.url===u);if(j>-1)imgs.splice(j,1);});}
 async function delProd(id){const p=S.products.find(x=>x.id===id);if(!p||!confirm(`Delete "${p.nameEn}"? 删除此产品？`))return;await saveOp(()=>txSaveProduct(p,{remove:true}),null,'🗑 Product deleted 已删除');}
 
